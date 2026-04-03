@@ -1,0 +1,39 @@
+{
+  "name": "galerialocal",
+  "version": "1.0.0",
+  "main": "expo-router/entry",
+  "type": "module",
+  "scripts": {
+    "start": "expo start",
+    "android": "expo start --android",
+    "dev": "expo start --lan",
+    "tunnel": "expo start --tunnel"
+  },
+  "dependencies": {
+    "@google/genai": "^1.29.0",
+    "@react-navigation/drawer": "^7.9.8",
+    "@react-navigation/native": "^7.2.2",
+    "@shopify/flash-list": "2.0.2",
+    "expo": "~54.0.0",
+    "expo-constants": "~18.0.0",
+    "expo-image": "~3.0.11",
+    "expo-linking": "~8.0.11",
+    "expo-media-library": "~18.2.1",
+    "expo-router": "~6.0.0",
+    "expo-sqlite": "~16.0.0",
+    "lucide-react-native": "^1.7.0",
+    "react": "19.1.0",
+    "react-native": "0.81.5",
+    "react-native-gesture-handler": "~2.28.0",
+    "react-native-reanimated": "~4.1.1",
+    "react-native-safe-area-context": "~5.6.2",
+    "react-native-screens": "~4.16.0",
+    "react-native-svg": "15.12.1",
+    "react-native-worklets": "0.5.1"
+  },
+  "devDependencies": {
+    "@types/react": "~19.1.10",
+    "babel-preset-expo": "~54.0.0",
+    "typescript": "~5.9.2"
+  }
+}

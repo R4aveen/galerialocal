@@ -1,0 +1,5 @@
+{
+  "name": "GaleriaLocal",
+  "description": "Tu galería de fotos 100% offline y privada.",
+  "requestFramePermissions": ["camera", "microphone", "geolocation"]
+}

@@ -1,0 +1,30 @@
+{
+  "expo": {
+    "name": "GaleriaLocal",
+    "slug": "galerialocal",
+    "version": "1.0.0",
+    "scheme": "galerialocal",
+    "orientation": "portrait",
+    "userInterfaceStyle": "dark",
+    "newArchEnabled": true,
+    "ios": {
+      "supportsTablet": true
+    },
+    "android": {
+      "package": "com.anonymous.galerialocal"
+    },
+    "plugins": [
+      "expo-router",
+      "expo-sqlite",
+      [
+        "expo-media-library",
+        {
+          "photosPermission": "Permitir acceso a fotos.",
+          "saveToLibraryPermission": "Permitir guardar fotos.",
+          "granularPermissions": ["photo", "video"],
+          "isAccessMediaLocationEnabled": true
+        }
+      ]
+    ]
+  }
+}
