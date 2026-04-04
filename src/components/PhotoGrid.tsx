@@ -1,3 +1,7 @@
+import { GridRow, GridSkeletonRow, buildGridModel, HEADER_HEIGHT } from "./PhotoGridComponents/GridBuilder";
+import MonthHeader from './PhotoGridComponents/MonthHeader';
+import AssetRow from './PhotoGridComponents/AssetRow';
+import GridSkeletonRowUI from './PhotoGridComponents/GridSkeletonRow';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Dimensions, StyleSheet, View, ActivityIndicator, Text } from 'react-native';
 import { FlashList, type FlashListRef } from '@shopify/flash-list';
@@ -9,45 +13,8 @@ import { getSafeAssetTimestamp } from '../utils/mediaDate';
 const COLUMNS = 3;
 const SCREEN_WIDTH = Dimensions.get('window').width;
 const ITEM_SIZE = SCREEN_WIDTH / COLUMNS;
-const HEADER_HEIGHT = 32;
 const ROW_HEIGHT = ITEM_SIZE;
 const SCRUB_THROTTLE_MS = 85;
-
-type GridHeaderRow = {
-  key: string;
-  type: 'header';
-  monthKey: string;
-  label: string;
-};
-
-type GridAssetRow = {
-  key: string;
-  type: 'row';
-  monthKey: string;
-  assets: MediaLibrary.Asset[];
-};
-
-type GridSkeletonRow = {
-  key: string;
-  type: 'skeleton';
-};
-
-type GridRow = GridHeaderRow | GridAssetRow | GridSkeletonRow;
-
-type MonthAnchor = {
-  monthKey: string;
-  label: string;
-  year: string;
-  index: number;
-};
-
-type YearAnchor = {
-  year: string;
-  monthKey: string;
-  label: string;
-  index: number;
-  offset: number;
-};
 
 interface Props {
   listKey?: string;
@@ -91,112 +58,7 @@ function PhotoGrid({
     return Array.from({ length: 6 }).map((_, idx) => ({ key: `skeleton-${idx}`, type: 'skeleton' as const }));
   }, [loading]);
 
-  const gridModel = useMemo(() => {
-    const rows: GridRow[] = [];
-    const labelByIndex: string[] = [];
-    const monthKeyByIndex: string[] = [];
-    const monthAnchors: MonthAnchor[] = [];
-    const offsetByIndex = new Map<number, number>();
-    let runningOffset = 0;
-
-    const monthLabel = (timestampMs: number) => {
-      const date = new Date(timestampMs);
-      const label = date.toLocaleDateString('es-ES', { month: 'long', year: 'numeric' });
-      const year = String(date.getFullYear());
-      const month = String(date.getMonth() + 1).padStart(2, '0');
-      return { label, year, monthKey: `${year}-${month}` };
-    };
-
-    let currentMonthKey: string | null = null;
-    let currentLabel = '';
-    let currentChunk: MediaLibrary.Asset[] = [];
-
-    const flushChunk = () => {
-      if (!currentMonthKey || currentChunk.length === 0) return;
-      const rowIndex = rows.length;
-      offsetByIndex.set(rowIndex, runningOffset);
-      rows.push({
-        key: `${currentMonthKey}-row-${rowIndex}`,
-        type: 'row',
-        monthKey: currentMonthKey,
-        assets: currentChunk,
-      });
-      runningOffset += ROW_HEIGHT;
-      labelByIndex[rowIndex] = currentLabel;
-      monthKeyByIndex[rowIndex] = currentMonthKey;
-      currentChunk = [];
-    };
-
-    photos.forEach((asset, idx) => {
-      const info = monthLabel(getSafeAssetTimestamp(asset));
-      const monthChanged = info.monthKey !== currentMonthKey;
-
-      if (monthChanged) {
-        flushChunk();
-
-        const headerIndex = rows.length;
-        offsetByIndex.set(headerIndex, runningOffset);
-        rows.push({
-          key: `${info.monthKey}-header-${idx}`,
-          type: 'header',
-          monthKey: info.monthKey,
-          label: info.label,
-        });
-        runningOffset += HEADER_HEIGHT;
-
-        labelByIndex[headerIndex] = info.label;
-        monthKeyByIndex[headerIndex] = info.monthKey;
-        monthAnchors.push({ monthKey: info.monthKey, label: info.label, year: info.year, index: headerIndex });
-
-        currentMonthKey = info.monthKey;
-        currentLabel = info.label;
-      }
-
-      currentChunk.push(asset);
-      if (currentChunk.length === COLUMNS) {
-        flushChunk();
-      }
-    });
-
-    flushChunk();
-
-    const uniqueMonthAnchors: MonthAnchor[] = [];
-    const seenMonths = new Set<string>();
-    monthAnchors.forEach((anchor) => {
-      if (seenMonths.has(anchor.monthKey)) return;
-      seenMonths.add(anchor.monthKey);
-      uniqueMonthAnchors.push(anchor);
-    });
-
-    const monthAnchorIndexByKey = new Map<string, number>();
-    uniqueMonthAnchors.forEach((anchor) => {
-      monthAnchorIndexByKey.set(anchor.monthKey, anchor.index);
-    });
-
-    const yearAnchors: YearAnchor[] = [];
-    const seenYears = new Set<string>();
-    uniqueMonthAnchors.forEach((anchor) => {
-      if (seenYears.has(anchor.year)) return;
-      seenYears.add(anchor.year);
-      yearAnchors.push({
-        year: anchor.year,
-        monthKey: anchor.monthKey,
-        label: anchor.label,
-        index: anchor.index,
-        offset: offsetByIndex.get(anchor.index) || 0,
-      });
-    });
-
-    return {
-      rows,
-      labelByIndex,
-      monthKeyByIndex,
-      monthAnchors: uniqueMonthAnchors,
-      monthAnchorIndexByKey,
-      yearAnchors,
-      offsetByIndex,
-    };
-  }, [photos]);
+    const gridModel = useMemo(() => buildGridModel(photos, COLUMNS, ROW_HEIGHT), [photos]);
 
   const scheduleOverlayHide = useCallback(() => {
     if (hideOverlayTimerRef.current) {
@@ -382,37 +244,26 @@ function PhotoGrid({
         maxToRenderPerBatch={24}
         renderItem={({ item }) => {
           if (item.type === 'header') {
-            return <Text style={styles.sectionHeader}>{item.label}</Text>;
+            return <MonthHeader label={item.label} />;
           }
 
           if (item.type === 'skeleton') {
             return (
-              <View style={styles.row}>
-                {Array.from({ length: COLUMNS }).map((_, idx) => (
-                  <View key={`skeleton-cell-${item.key}-${idx}`} style={[styles.cell, styles.skeletonCell]} />
-                ))}
+              <View style={[styles.row, { height: ITEM_SIZE }]}>
+                <GridSkeletonRowUI columns={COLUMNS} itemSize={ITEM_SIZE} itemKey={item.key} />
               </View>
             );
           }
 
           return (
-            <View style={styles.row}>
-              {item.assets.map((asset, assetIdx) => (
-                <View key={`${asset.id}-${item.key}-${assetIdx}`} style={styles.cell}>
-                  <PhotoThumbnail
-                    asset={asset}
-                    size={ITEM_SIZE}
-                    onPress={onPhotoPress}
-                    onLongPress={onPhotoLongPress}
-                  />
-                </View>
-              ))}
-              {item.assets.length < COLUMNS
-                ? Array.from({ length: COLUMNS - item.assets.length }).map((_, idx) => (
-                    <View key={`spacer-${item.key}-${idx}`} style={styles.cell} />
-                  ))
-                : null}
-            </View>
+            <AssetRow
+              itemKey={item.key}
+              assets={item.assets}
+              columns={COLUMNS}
+              itemSize={ITEM_SIZE}
+              onPhotoPress={onPhotoPress}
+              onPhotoLongPress={onPhotoLongPress}
+            />
           );
         }}
         keyExtractor={(item) => item.key}
