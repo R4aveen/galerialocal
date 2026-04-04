@@ -222,6 +222,10 @@ function PhotoGrid({
     };
   }, []);
 
+  const alignToTopNow = useCallback(() => {
+    listRef.current?.scrollToOffset?.({ offset: 0, animated: false });
+  }, []);
+
   useEffect(() => {
     initialTopAlignedRef.current = false;
   }, [listKey]);
@@ -242,9 +246,12 @@ function PhotoGrid({
     setIsScrubbing(false);
 
     requestAnimationFrame(() => {
-      listRef.current?.scrollToOffset?.({ offset: 0, animated: false });
+      alignToTopNow();
+      requestAnimationFrame(() => {
+        alignToTopNow();
+      });
     });
-  }, [loading, photos.length, resetScrollToken]);
+  }, [alignToTopNow, loading, photos.length, resetScrollToken]);
 
   useEffect(() => {
     if (loading) return;
@@ -253,9 +260,12 @@ function PhotoGrid({
 
     initialTopAlignedRef.current = true;
     requestAnimationFrame(() => {
-      listRef.current?.scrollToOffset?.({ offset: 0, animated: false });
+      alignToTopNow();
+      requestAnimationFrame(() => {
+        alignToTopNow();
+      });
     });
-  }, [loading, photos.length]);
+  }, [alignToTopNow, loading, photos.length]);
 
   const beginTimelineInteraction = useCallback((scrubbing: boolean) => {
     if (hideOverlayTimerRef.current) {
@@ -355,7 +365,7 @@ function PhotoGrid({
         // Mantener una key estable evita desmontar/remontar toda la lista
         // cada vez que cambia la cantidad de fotos cargadas.
         key={listKey || 'default'}
-        initialScrollIndex={0}
+        // initialScrollIndex={0} // Removido para evitar que el FlashList fuerce el índice 0 durante la paginación
         data={listRows}
         estimatedItemSize={ROW_HEIGHT}
         estimatedListSize={{ width: SCREEN_WIDTH, height: Dimensions.get('window').height }}
@@ -414,10 +424,10 @@ function PhotoGrid({
         }}
         keyExtractor={(item) => item.key}
         onEndReached={onLoadMore}
-        onEndReachedThreshold={1.1}
+        onEndReachedThreshold={4}
         removeClippedSubviews={false}
         scrollEventThrottle={16}
-        updateCellsBatchingPeriod={10}
+        updateCellsBatchingPeriod={30}
         onViewableItemsChanged={onViewableItemsChanged}
         onScrollBeginDrag={() => beginTimelineInteraction(false)}
         onMomentumScrollBegin={() => beginTimelineInteraction(false)}
@@ -465,11 +475,14 @@ function PhotoGrid({
             scrubYearByLocation(event.nativeEvent.locationY);
           }}
           onResponderRelease={(event) => {
+            const wasScrubbing = scrubActiveRef.current;
             scrubActiveRef.current = false;
             setIsScrubbing(false);
-            const finalAnchor = yearAnchorFromLocation(event.nativeEvent.locationY);
-            if (finalAnchor && finalAnchor.monthKey !== activeMonthRef.current) {
-              jumpToMonth(finalAnchor.monthKey, false);
+            if (wasScrubbing) {
+              const finalAnchor = yearAnchorFromLocation(event.nativeEvent.locationY);
+              if (finalAnchor && finalAnchor.monthKey !== activeMonthRef.current) {
+                jumpToMonth(finalAnchor.monthKey, false);
+              }
             }
             scheduleOverlayHide();
           }}

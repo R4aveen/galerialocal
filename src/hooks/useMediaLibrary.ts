@@ -26,8 +26,8 @@ const isScreenshot = (asset: MediaLibrary.Asset) => {
 };
 
 // Configuración de paginación optimizada
-const INITIAL_LOAD = 72;   // Carga inicial más ligera para mostrar contenido antes.
-const PAGE_SIZE = 80;      // Páginas más grandes para mantener fluidez en scroll rápido.
+const INITIAL_LOAD = 80;
+const PAGE_SIZE = 400;
 
 const getMediaTypesForQuery = (mediaFilter: MediaFilter): MediaLibrary.MediaTypeValue[] => {
   if (mediaFilter === 'video') return [MediaLibrary.MediaType.video];
@@ -37,8 +37,8 @@ const getMediaTypesForQuery = (mediaFilter: MediaFilter): MediaLibrary.MediaType
 
 const CACHE_TTL_MS = 90_000;
 const MAX_CACHE_ENTRIES = 12;
-const PREFETCH_TARGET_ALL = 240;
-const PREFETCH_TARGET_FILTERED = 140;
+const PREFETCH_TARGET_ALL = 800;
+const PREFETCH_TARGET_FILTERED = 400;
 const mediaQueryCache = new Map<string, MediaQueryCacheEntry>();
 
 const buildCacheKey = (mediaFilter: MediaFilter, sortOrder: SortOrder) => `${mediaFilter}::${sortOrder}`;
