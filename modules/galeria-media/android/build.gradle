@@ -1,0 +1,31 @@
+apply plugin: 'com.android.library'
+apply plugin: 'kotlin-android'
+
+group = 'expo.modules.galeriamedia'
+version = '1.0.0'
+
+android {
+    // Matches your project's namespace
+    namespace "expo.modules.galeriamedia"
+    
+    // Aligned with your root project (SDK 36)
+    compileSdkVersion 36
+    
+    defaultConfig {
+        minSdkVersion 24
+        targetSdkVersion 36
+    }
+
+    lintOptions {
+        abortOnError false
+    }
+}
+
+dependencies {
+    implementation project(':expo-modules-core')
+    implementation "org.jetbrains.kotlin:kotlin-stdlib:2.1.20"
+    
+    // Add these two lines for Coroutine support
+    implementation "org.jetbrains.kotlinx:kotlinx-coroutines-core:1.8.0"
+    implementation "org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.0"
+}

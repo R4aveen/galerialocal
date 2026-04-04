@@ -17,6 +17,7 @@ let persistRunning = false;
 let jsonCacheInitialized = false;
 
 const normalizeTimestamp = (value?: number | null) => {
+  'worklet';
   if (!value || !Number.isFinite(value) || value <= 0) return null;
 
   const candidates = [value, value * 1000, Math.floor(value / 1000), Math.floor(value / 1_000_000)];
@@ -31,6 +32,7 @@ const normalizeTimestamp = (value?: number | null) => {
 
 // Keep filename parsing conservative to avoid false positives from random names.
 const timestampFromFilename = (name?: string) => {
+  'worklet';
   if (!name) return null;
   const safe = name.trim();
 
@@ -83,6 +85,7 @@ const flushPersistQueue = async () => {
 };
 
 const computeTimestamp = (asset: MediaLibrary.Asset) => {
+  'worklet';
   const creation = normalizeTimestamp(asset.creationTime);
   if (creation != null) return creation;
 
@@ -152,6 +155,7 @@ export const hydrateTimestampCache = async (assets: MediaLibrary.Asset[]) => {
 };
 
 export const getSafeAssetTimestamp = (asset: MediaLibrary.Asset) => {
+  'worklet';
   // Level 1: Check JSON Cache (instant, no async)
   const fromJson = getFromJsonCache(asset.id);
   if (fromJson != null) {
@@ -174,6 +178,7 @@ export const getSafeAssetTimestamp = (asset: MediaLibrary.Asset) => {
 };
 
 export const sortAssetsByTimestamp = (assets: MediaLibrary.Asset[], sortOrder: 'newest' | 'oldest') => {
+  'worklet';
   const direction = sortOrder === 'oldest' ? 1 : -1;
   return [...assets].sort((a, b) => {
     const diff = getSafeAssetTimestamp(a) - getSafeAssetTimestamp(b);

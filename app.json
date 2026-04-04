@@ -8,7 +8,8 @@
     "userInterfaceStyle": "dark",
     "newArchEnabled": true,
     "ios": {
-      "supportsTablet": true
+      "supportsTablet": true,
+      "bundleIdentifier": "com.anonymous.galerialocal"
     },
     "android": {
       "package": "com.anonymous.galerialocal",

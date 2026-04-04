@@ -1,4 +1,5 @@
 import * as MediaLibrary from 'expo-media-library';
+import GaleriaMedia from '../../modules/galeria-media';
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { getSafeAssetTimestamp, hydrateTimestampCache, sortAssetsByTimestamp } from '../utils/mediaDate';
 
@@ -94,6 +95,15 @@ export function useMediaLibrary(isGranted: boolean, options: UseMediaLibraryOpti
     loadingRef.current = true;
     setLoading(true);
     try {
+      // ✅ [Nativo Local]: Para cuando se compile el bridge de Android, 
+      // reemplazamos el fetch de expo-media-library con esto:
+      /*
+      if (!after) {
+        const groupedData = await GaleriaMedia.getGroupedAssetsAsync('all');
+        console.log("Assets Agrupados desde Kotlin:", groupedData.length);
+      }
+      */
+
       const { assets: nextAssets, hasNextPage: next, endCursor: cursor } = await MediaLibrary.getAssetsAsync({
         mediaType: getMediaTypesForQuery(options.mediaFilter),
         sortBy: [[MediaLibrary.SortBy.creationTime, options.sortOrder === 'oldest']],

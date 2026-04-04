@@ -1,7 +1,7 @@
 import { GridRow, GridSkeletonRow, buildGridModel, HEADER_HEIGHT } from "./PhotoGridComponents/GridBuilder";
 import MonthHeader from './PhotoGridComponents/MonthHeader';
 import AssetRow from './PhotoGridComponents/AssetRow';
-import GridSkeletonRowUI from './PhotoGridComponents/GridSkeletonRow';
+import { TimelineRail } from './PhotoGridComponents/TimelineRail';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Dimensions, StyleSheet, View, ActivityIndicator, Text } from 'react-native';
 import { FlashList, type FlashListRef } from '@shopify/flash-list';
@@ -250,7 +250,9 @@ function PhotoGrid({
           if (item.type === 'skeleton') {
             return (
               <View style={[styles.row, { height: ITEM_SIZE }]}>
-                <GridSkeletonRowUI columns={COLUMNS} itemSize={ITEM_SIZE} itemKey={item.key} />
+                {Array.from({ length: COLUMNS }).map((_, idx) => (
+                  <View key={`skeleton-cell-${item.key}-${idx}`} style={[styles.cell, styles.skeletonCell]} />
+                ))}
               </View>
             );
           }
