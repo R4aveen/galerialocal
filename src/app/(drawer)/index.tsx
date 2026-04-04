@@ -12,6 +12,7 @@ import { COLORS, SPACING } from '../../constants/theme';
 import { CameraOff, FolderInput, Lock, Share2, Trash2, X } from 'lucide-react-native';
 import { useRouter } from 'expo-router';
 import { setGallerySession } from '../../store/gallerySession';
+import { useSelectionStore } from '../../store/useSelectionStore';
 
 export default function AllPhotosScreen() {
   const { isGranted, requestPermission, isUnsupportedExpoGo } = usePermissions();
@@ -21,8 +22,14 @@ export default function AllPhotosScreen() {
   const [mediaFilter, setMediaFilter] = useState<MediaFilter>('all');
   const [dateFilter, setDateFilter] = useState<DateFilter>('all');
   const [sortOrder, setSortOrder] = useState<SortOrder>('newest');
-  const [selectionMode, setSelectionMode] = useState(false);
-  const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  
+  const selectionMode = useSelectionStore(state => state.selectionMode);
+  const selectedIdsSet = useSelectionStore(state => state.selectedIds);
+  const selectedIds = Array.from(selectedIdsSet);
+  const toggleSelectionStore = useSelectionStore(state => state.toggleSelection);
+  const clearSelectionStore = useSelectionStore(state => state.clearSelection);
+  const setSelectionModeStore = useSelectionStore(state => state.setSelectionMode);
+
   const [bulkProcessing, setBulkProcessing] = useState(false);
   const [processingCurrent, setProcessingCurrent] = useState(0);
   const [processingTotal, setProcessingTotal] = useState(0);
@@ -88,14 +95,11 @@ export default function AllPhotosScreen() {
   );
 
   const toggleSelection = (assetId: string) => {
-    setSelectedIds((prev) =>
-      prev.includes(assetId) ? prev.filter((id) => id !== assetId) : [...prev, assetId]
-    );
+    toggleSelectionStore(assetId);
   };
 
   const clearSelection = () => {
-    setSelectionMode(false);
-    setSelectedIds([]);
+    clearSelectionStore();
     setProcessingCurrent(0);
     setProcessingTotal(0);
   };
@@ -135,8 +139,8 @@ export default function AllPhotosScreen() {
 
   const handlePhotoLongPress = (asset: (typeof assets)[number]) => {
     if (!selectionMode) {
-      setSelectionMode(true);
-      setSelectedIds([asset.id]);
+      setSelectionModeStore(true);
+      toggleSelectionStore(asset.id);
       return;
     }
     toggleSelection(asset.id);
@@ -398,15 +402,13 @@ export default function AllPhotosScreen() {
         </View>
       ) : (
         <PhotoGrid
-            listKey={`${mediaFilter}-${dateFilter}-${sortOrder}-${galleryResetToken}`}
+          listKey={`${mediaFilter}-${dateFilter}-${sortOrder}-${galleryResetToken}`}
           resetScrollToken={galleryResetToken}
           photos={assets}
           onLoadMore={loadMore}
           loading={loading}
           onPhotoPress={handlePhotoPress}
           onPhotoLongPress={handlePhotoLongPress}
-          selectionMode={selectionMode}
-          selectedIds={selectedIds}
         />
       )}
 

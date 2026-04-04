@@ -63,15 +63,10 @@ const readCacheEntry = (key: string) => {
   return entry;
 };
 
-const sortByCreationTime = (assets: MediaLibrary.Asset[], sortOrder: SortOrder) => {
-  const direction = sortOrder === 'oldest' ? 1 : -1;
-  return [...assets].sort((a, b) => {
-    const aTime = Number(a.creationTime || 0);
-    const bTime = Number(b.creationTime || 0);
-    if (aTime !== bTime) return (aTime - bTime) * direction;
-    return a.id.localeCompare(b.id) * direction;
-  });
-};
+// Reemplazamos sortByCreationTime local por sortAssetsByTimestamp exportado desde mediaDate
+// para usar el mismo parser unificado (evitando saltos post-carga).
+// Constante que reemplaza su uso local:
+const sortByCreationTime = sortAssetsByTimestamp;
 
 export function useMediaLibrary(isGranted: boolean, options: UseMediaLibraryOptions) {
   const [assets, setAssets] = useState<MediaLibrary.Asset[]>([]);
@@ -110,12 +105,16 @@ export function useMediaLibrary(isGranted: boolean, options: UseMediaLibraryOpti
         return;
       }
 
-      const mergedBase = after ? [...assetsRef.current, ...nextAssets] : nextAssets;
+      // Prevenimos repetidos deduplicando mediante Map por asset.id.
+      // (Esto neutraliza el bug nativo de Android donde devuelve fotos duplicadas en saltos de paginación)
+      const mergedBaseRaw = after ? [...assetsRef.current, ...nextAssets] : nextAssets;
+      const mergedBase = Array.from(new Map(mergedBaseRaw.map(item => [item.id, item])).values());
 
       // Show assets IMMEDIATELY without sorting (already ordered by MediaLibrary):
       setAssets((prev) => {
         const merged = after ? [...prev, ...nextAssets] : nextAssets;
-        const ordered = sortByCreationTime(merged, options.sortOrder);
+        const uniqueAssets = Array.from(new Map(merged.map(item => [item.id, item])).values());
+        const ordered = sortByCreationTime(uniqueAssets, options.sortOrder);
         assetsRef.current = ordered;
         updateCacheEntry(cacheKey, {
           assets: ordered,

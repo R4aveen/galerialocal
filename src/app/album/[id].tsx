@@ -13,6 +13,7 @@ import { useTrash } from '../../hooks/useTrash';
 import { usePrivateVault } from '../../hooks/usePrivateVault';
 import { useAlbumManager } from '../../hooks/useAlbumManager';
 import { setGallerySession } from '../../store/gallerySession';
+import { useSelectionStore } from '../../store/useSelectionStore';
 
 const PAGE_SIZE = 50;
 
@@ -30,8 +31,12 @@ export default function AlbumDetailScreen() {
   const [loading, setLoading] = useState(false);
   const [hasNextPage, setHasNextPage] = useState(false);
   const [endCursor, setEndCursor] = useState<string | undefined>(undefined);
-  const [selectionMode, setSelectionMode] = useState(false);
-  const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  const selectionMode = useSelectionStore(state => state.selectionMode);
+  const selectedIdsSet = useSelectionStore(state => state.selectedIds);
+  const selectedIds = Array.from(selectedIdsSet);
+  const toggleSelectionStore = useSelectionStore(state => state.toggleSelection);
+  const clearSelectionStore = useSelectionStore(state => state.clearSelection);
+  const setSelectionModeStore = useSelectionStore(state => state.setSelectionMode);
   const [bulkProcessing, setBulkProcessing] = useState(false);
   const [processingCurrent, setProcessingCurrent] = useState(0);
   const [processingTotal, setProcessingTotal] = useState(0);
@@ -97,14 +102,11 @@ export default function AlbumDetailScreen() {
   );
 
   const toggleSelection = (assetId: string) => {
-    setSelectedIds((prev) =>
-      prev.includes(assetId) ? prev.filter((id) => id !== assetId) : [...prev, assetId]
-    );
+    toggleSelectionStore(assetId);
   };
 
   const clearSelection = () => {
-    setSelectionMode(false);
-    setSelectedIds([]);
+    clearSelectionStore();
     setProcessingCurrent(0);
     setProcessingTotal(0);
   };
@@ -353,14 +355,12 @@ export default function AlbumDetailScreen() {
         }}
         onPhotoLongPress={(asset) => {
           if (!selectionMode) {
-            setSelectionMode(true);
-            setSelectedIds([asset.id]);
+            setSelectionModeStore(true);
+            toggleSelection(asset.id);
             return;
           }
           toggleSelection(asset.id);
         }}
-        selectionMode={selectionMode}
-        selectedIds={selectedIds}
       />
 
       <AlbumManagerModal

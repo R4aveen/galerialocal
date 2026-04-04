@@ -56,8 +56,6 @@ interface Props {
   onLoadMore: () => void;
   onPhotoPress: (asset: MediaLibrary.Asset) => void;
   onPhotoLongPress?: (asset: MediaLibrary.Asset) => void;
-  selectedIds?: string[];
-  selectionMode?: boolean;
   loading: boolean;
 }
 
@@ -68,8 +66,6 @@ function PhotoGrid({
   onLoadMore,
   onPhotoPress,
   onPhotoLongPress,
-  selectedIds = [],
-  selectionMode = false,
   loading,
 }: Props) {
   const listRef = useRef<FlashListRef<GridRow> | null>(null);
@@ -90,7 +86,6 @@ function PhotoGrid({
   const [activeMonthKey, setActiveMonthKey] = useState<string | null>(null);
   const [activeYear, setActiveYear] = useState('');
 
-  const selectedSet = useMemo(() => new Set(selectedIds), [selectedIds]);
   const skeletonRows = useMemo<GridSkeletonRow[]>(() => {
     if (!loading) return [];
     return Array.from({ length: 6 }).map((_, idx) => ({ key: `skeleton-${idx}`, type: 'skeleton' as const }));
@@ -409,8 +404,6 @@ function PhotoGrid({
                     size={ITEM_SIZE}
                     onPress={onPhotoPress}
                     onLongPress={onPhotoLongPress}
-                    selected={selectedSet.has(asset.id)}
-                    selectionMode={selectionMode}
                   />
                 </View>
               ))}

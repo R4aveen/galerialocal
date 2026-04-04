@@ -89,7 +89,10 @@ const computeTimestamp = (asset: MediaLibrary.Asset) => {
   const modification = normalizeTimestamp((asset as any).modificationTime);
   if (modification != null) return modification;
 
-  // Filename parsing is deferred to background hydration; use MIN_REASONABLE_TS immediately:
+  const fromFilename = timestampFromFilename(asset.filename);
+  if (fromFilename != null) return fromFilename;
+
+  // Fallback to MIN_REASONABLE_TS if totally unparseable
   return MIN_REASONABLE_TS;
 };
 

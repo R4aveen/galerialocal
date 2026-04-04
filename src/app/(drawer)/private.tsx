@@ -12,6 +12,7 @@ import { usePermissions } from '../../hooks/usePermissions';
 import { usePrivateLockV2 } from '../../hooks/usePrivateLockV2';
 import { flushJsonCacheToDisk } from '../../utils/jsonTimestampCache';
 import { setGallerySession } from '../../store/gallerySession';
+import { useSelectionStore } from '../../store/useSelectionStore';
 import PhotoGrid from '../../components/PhotoGrid';
 import AlbumManagerModal from '../../components/AlbumManagerModal';
 
@@ -21,8 +22,14 @@ export default function PrivateScreen() {
   const { privateItems, restoreManyFromPrivate, deleteManyPrivate, refreshPrivate, hideInPrivate } = usePrivateVault();
   const { hasPin, unlocked, setPin, unlockWithPin, changePin, clearPin, lock, loading: lockLoading } = usePrivateLockV2();
   const { albums, loading: loadingAlbums, moveAssetsToAlbum, createAlbumFromAssets } = useAlbumManager(Boolean(isGranted));
-  const [selectionMode, setSelectionMode] = useState(false);
-  const [selectedIds, setSelectedIds] = useState<string[]>([]);
+
+  const selectionMode = useSelectionStore(state => state.selectionMode);
+  const selectedIdsSet = useSelectionStore(state => state.selectedIds);
+  const selectedIds = Array.from(selectedIdsSet);
+  const toggleSelectionStore = useSelectionStore(state => state.toggleSelection);
+  const clearSelectionStore = useSelectionStore(state => state.clearSelection);
+  const setSelectionModeStore = useSelectionStore(state => state.setSelectionMode);
+
   const [processing, setProcessing] = useState(false);
   const [processingCurrent, setProcessingCurrent] = useState(0);
   const [processingTotal, setProcessingTotal] = useState(0);
@@ -144,16 +151,13 @@ export default function PrivateScreen() {
   );
 
   const clearSelection = () => {
-    setSelectionMode(false);
-    setSelectedIds([]);
+    clearSelectionStore();
     setProcessingCurrent(0);
     setProcessingTotal(0);
   };
 
   const toggleSelection = (assetId: string) => {
-    setSelectedIds((prev) =>
-      prev.includes(assetId) ? prev.filter((id) => id !== assetId) : [...prev, assetId]
-    );
+    toggleSelectionStore(assetId);
   };
 
   const handleShareSelected = async () => {
@@ -294,8 +298,8 @@ export default function PrivateScreen() {
 
   const handlePhotoLongPress = (asset: MediaLibrary.Asset) => {
     if (!selectionMode) {
-      setSelectionMode(true);
-      setSelectedIds([asset.id]);
+      setSelectionModeStore(true);
+      toggleSelection(asset.id);
       return;
     }
     toggleSelection(asset.id);
@@ -496,8 +500,6 @@ export default function PrivateScreen() {
         onLoadMore={() => undefined}
         onPhotoPress={handlePhotoPress}
         onPhotoLongPress={handlePhotoLongPress}
-        selectionMode={selectionMode}
-        selectedIds={selectedIds}
       />
 
       <AlbumManagerModal

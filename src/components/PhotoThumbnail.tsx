@@ -1,18 +1,22 @@
-import React from 'react';
+import React, { memo } from 'react';
 import { StyleSheet, Pressable, View, Text } from 'react-native';
 import { Image } from 'expo-image';
 import * as MediaLibrary from 'expo-media-library';
+import { useSelectionStore } from '../store/useSelectionStore';
 
 interface Props {
   asset: MediaLibrary.Asset;
   size: number;
   onPress: (asset: MediaLibrary.Asset) => void;
   onLongPress?: (asset: MediaLibrary.Asset) => void;
-  selected?: boolean;
-  selectionMode?: boolean;
 }
 
-function PhotoThumbnail({ asset, size, onPress, onLongPress, selected = false, selectionMode = false }: Props) {
+function PhotoThumbnail({ asset, size, onPress, onLongPress }: Props) {
+  // Suscripción atómica: El componente SOLO se volverá a renderizar si 
+  // su propio estado de selección cambia o si el modo selección se apaga/enciende globalmente.
+  const isSelected = useSelectionStore(state => state.selectedIds.has(asset.id));
+  const selectionMode = useSelectionStore(state => state.selectionMode);
+
   return (
     <Pressable 
       onPress={() => onPress(asset)}
@@ -20,7 +24,7 @@ function PhotoThumbnail({ asset, size, onPress, onLongPress, selected = false, s
       style={({ pressed }) => [
         styles.container, 
         { width: size, height: size },
-        selected && styles.selected,
+        isSelected && styles.selected,
         pressed && styles.pressed
       ]}
     >
@@ -38,15 +42,19 @@ function PhotoThumbnail({ asset, size, onPress, onLongPress, selected = false, s
       ) : null}
 
       {selectionMode ? (
-        <View style={[styles.selectionBadge, selected ? styles.selectionBadgeActive : null]}>
-          <Text style={styles.selectionBadgeText}>{selected ? '✓' : ''}</Text>
+        <View style={[styles.selectionBadge, isSelected ? styles.selectionBadgeActive : null]}>
+          <Text style={styles.selectionBadgeText}>{isSelected ? '✓' : ''}</Text>
         </View>
       ) : null}
     </Pressable>
   );
 }
 
-export default React.memo(PhotoThumbnail);
+// React.memo evitará que este componente se re-renderice si el Asset o las callbacks onPress no cambian,
+// ignorando los cambios globales de otras fotos.
+export default memo(PhotoThumbnail, (prev, next) => {
+  return prev.asset.id === next.asset.id && prev.size === next.size;
+});
 
 const styles = StyleSheet.create({
   container: {
