@@ -1,7 +1,7 @@
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { Drawer } from 'expo-router/drawer';
 import { COLORS } from '../../constants/theme';
-import { Image, LayoutGrid, Star, Trash2 } from 'lucide-react-native';
+import { Image, LayoutGrid, Lock, Star, Trash2 } from 'lucide-react-native';
 import CustomDrawerContent from '../../components/DrawerContent';
 
 export default function DrawerLayout() {
@@ -55,6 +55,14 @@ export default function DrawerLayout() {
             drawerLabel: 'Papelera',
             title: 'Papelera',
             drawerIcon: ({ color, size }) => <Trash2 color={color} size={size} />,
+          }}
+        />
+        <Drawer.Screen
+          name="private"
+          options={{
+            drawerLabel: 'Privadas',
+            title: 'Privadas',
+            drawerIcon: ({ color, size }) => <Lock color={color} size={size} />,
           }}
         />
       </Drawer>

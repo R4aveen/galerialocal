@@ -1,0 +1,479 @@
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import { ActivityIndicator, Alert, Share, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import * as MediaLibrary from 'expo-media-library';
+import { useLocalSearchParams, useRouter } from 'expo-router';
+import { ArrowLeft, CameraOff, FolderInput, Lock, Share2, Trash2, X } from 'lucide-react-native';
+import { useFocusEffect } from '@react-navigation/native';
+
+import PhotoGrid from '../../components/PhotoGrid';
+import AlbumManagerModal from '../../components/AlbumManagerModal';
+import { COLORS, SPACING } from '../../constants/theme';
+import { usePermissions } from '../../hooks/usePermissions';
+import { useTrash } from '../../hooks/useTrash';
+import { usePrivateVault } from '../../hooks/usePrivateVault';
+import { useAlbumManager } from '../../hooks/useAlbumManager';
+import { setGallerySession } from '../../store/gallerySession';
+
+const PAGE_SIZE = 50;
+
+export default function AlbumDetailScreen() {
+  const params = useLocalSearchParams<{ id: string; title?: string }>();
+  const albumId = params.id;
+  const albumTitle = params.title || 'Album';
+  const router = useRouter();
+  const { isGranted, requestPermission, isUnsupportedExpoGo } = usePermissions();
+  const { getTrashIds, refreshTrash, moveManyToTrash } = useTrash();
+  const { getPrivateIds, refreshPrivate, hideManyInPrivate } = usePrivateVault();
+  const { albums, loading: loadingAlbums, refreshAlbums, moveAssetsToAlbum, createAlbumFromAssets } = useAlbumManager(Boolean(isGranted));
+
+  const [assets, setAssets] = useState<MediaLibrary.Asset[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [hasNextPage, setHasNextPage] = useState(false);
+  const [endCursor, setEndCursor] = useState<string | undefined>(undefined);
+  const [selectionMode, setSelectionMode] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  const [bulkProcessing, setBulkProcessing] = useState(false);
+  const [processingCurrent, setProcessingCurrent] = useState(0);
+  const [processingTotal, setProcessingTotal] = useState(0);
+  const [showAlbumModal, setShowAlbumModal] = useState(false);
+  const [optimisticHiddenIds, setOptimisticHiddenIds] = useState<string[]>([]);
+
+  useFocusEffect(
+    React.useCallback(() => {
+      refreshTrash();
+      refreshPrivate();
+      refreshAlbums();
+    }, [refreshTrash, refreshPrivate, refreshAlbums])
+  );
+
+  const loadAssets = useCallback(
+    async (after?: string) => {
+      if (!albumId || !isGranted || loading) return;
+
+      setLoading(true);
+      try {
+        const result = await MediaLibrary.getAssetsAsync({
+          album: albumId,
+          first: PAGE_SIZE,
+          after,
+          mediaType: [MediaLibrary.MediaType.photo, MediaLibrary.MediaType.video],
+          sortBy: [[MediaLibrary.SortBy.creationTime, false]],
+        });
+
+        setAssets((prev) => (after ? [...prev, ...result.assets] : result.assets));
+        setHasNextPage(result.hasNextPage);
+        setEndCursor(result.endCursor);
+      } catch (error) {
+        console.error('Error loading album assets:', error);
+      } finally {
+        setLoading(false);
+      }
+    },
+    [albumId, isGranted, loading]
+  );
+
+  useEffect(() => {
+    if (!isGranted || !albumId) return;
+    setAssets([]);
+    setHasNextPage(false);
+    setEndCursor(undefined);
+    loadAssets(undefined);
+  }, [albumId, isGranted]);
+
+  const handleLoadMore = () => {
+    if (hasNextPage && endCursor) {
+      loadAssets(endCursor);
+    }
+  };
+
+  const filteredAssets = useMemo(() => {
+    const excluded = new Set([...getTrashIds(), ...getPrivateIds(), ...optimisticHiddenIds]);
+    return assets.filter((asset) => !excluded.has(asset.id));
+  }, [assets, getTrashIds, getPrivateIds, optimisticHiddenIds]);
+
+  const selectedAssets = useMemo(
+    () => filteredAssets.filter((asset) => selectedIds.includes(asset.id)),
+    [filteredAssets, selectedIds]
+  );
+
+  const toggleSelection = (assetId: string) => {
+    setSelectedIds((prev) =>
+      prev.includes(assetId) ? prev.filter((id) => id !== assetId) : [...prev, assetId]
+    );
+  };
+
+  const clearSelection = () => {
+    setSelectionMode(false);
+    setSelectedIds([]);
+    setProcessingCurrent(0);
+    setProcessingTotal(0);
+  };
+
+  const handleShareSelected = async () => {
+    if (selectedAssets.length === 0) return;
+    try {
+      if (selectedAssets.length > 1) {
+        Alert.alert('Compartir', 'Por ahora se comparte un archivo a la vez. Se abrira el primero seleccionado.');
+      }
+      await Share.share({
+        title: 'Compartir archivo',
+        url: selectedAssets[0].uri,
+      });
+    } catch (error) {
+      console.error('Error sharing selected album assets:', error);
+    }
+  };
+
+  const handleDeleteSelected = () => {
+    if (selectedAssets.length === 0 || bulkProcessing) return;
+
+    Alert.alert(
+      'Mover a papelera',
+      `Se moveran ${selectedAssets.length} elementos a la papelera.`,
+      [
+        { text: 'Cancelar', style: 'cancel' },
+        {
+          text: 'Mover',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              setBulkProcessing(true);
+              setProcessingTotal(selectedAssets.length);
+              const { failed, movedIds } = await moveManyToTrash(selectedAssets, (processed, total) => {
+                setProcessingCurrent(processed);
+                setProcessingTotal(total);
+              });
+              if (movedIds.length > 0) {
+                setOptimisticHiddenIds((prev) => Array.from(new Set([...prev, ...movedIds])));
+              }
+              await refreshTrash();
+              clearSelection();
+              if (failed > 0) {
+                Alert.alert('Atencion', `${failed} elementos no se pudieron mover a la papelera.`);
+              }
+            } finally {
+              setBulkProcessing(false);
+            }
+          },
+        },
+      ]
+    );
+  };
+
+  const handleMoveToAlbum = async (targetAlbumId: string) => {
+    if (selectedAssets.length === 0 || bulkProcessing) return;
+
+    try {
+      setBulkProcessing(true);
+      setProcessingTotal(selectedAssets.length);
+      const { failed, movedIds } = await moveAssetsToAlbum(
+        selectedAssets,
+        targetAlbumId,
+        'move',
+        (processed, total) => {
+          setProcessingCurrent(processed);
+          setProcessingTotal(total);
+        }
+      );
+      if (movedIds.length > 0) {
+        setOptimisticHiddenIds((prev) => Array.from(new Set([...prev, ...movedIds])));
+      }
+      setShowAlbumModal(false);
+      clearSelection();
+      await refreshAlbums();
+      await loadAssets(undefined);
+
+      if (failed > 0) {
+        Alert.alert('Atencion', `${failed} elementos no se pudieron mover al album.`);
+      }
+    } finally {
+      setBulkProcessing(false);
+    }
+  };
+
+  const handleCreateAlbum = async (name: string) => {
+    if (selectedAssets.length === 0 || bulkProcessing) return;
+
+    try {
+      setBulkProcessing(true);
+      setProcessingTotal(selectedAssets.length);
+      const result = await createAlbumFromAssets(name, selectedAssets, 'move', (processed, total) => {
+        setProcessingCurrent(processed);
+        setProcessingTotal(total);
+      });
+
+      if (!result.ok) {
+        Alert.alert('Error', 'No se pudo crear el album o mover los elementos.');
+        return;
+      }
+
+      setShowAlbumModal(false);
+      clearSelection();
+      await refreshAlbums();
+      await loadAssets(undefined);
+    } finally {
+      setBulkProcessing(false);
+    }
+  };
+
+  const handlePrivateSelected = async () => {
+    if (selectedAssets.length === 0 || bulkProcessing) return;
+
+    try {
+      setBulkProcessing(true);
+      setProcessingTotal(selectedAssets.length);
+      const { failed, movedIds } = await hideManyInPrivate(selectedAssets, (processed, total) => {
+        setProcessingCurrent(processed);
+        setProcessingTotal(total);
+      });
+      if (movedIds.length > 0) {
+        setOptimisticHiddenIds((prev) => Array.from(new Set([...prev, ...movedIds])));
+      }
+      await refreshPrivate();
+      clearSelection();
+      await loadAssets(undefined);
+
+      if (failed > 0) {
+        Alert.alert('Atencion', `${failed} elementos no se pudieron mover a privados.`);
+      }
+    } finally {
+      setBulkProcessing(false);
+    }
+  };
+
+  if (isUnsupportedExpoGo) {
+    return (
+      <View style={styles.center}>
+        <CameraOff size={64} color={COLORS.textMuted} />
+        <Text style={styles.title}>Limitacion de Expo Go</Text>
+        <Text style={styles.subtitle}>
+          Para ver albumes en Android usa un Development Build.
+        </Text>
+      </View>
+    );
+  }
+
+  if (!isGranted) {
+    return (
+      <View style={styles.center}>
+        <CameraOff size={64} color={COLORS.textMuted} />
+        <Text style={styles.title}>Sin acceso a fotos</Text>
+        <Text style={styles.subtitle}>Necesitamos permisos para leer este album.</Text>
+        <TouchableOpacity style={styles.button} onPress={requestPermission}>
+          <Text style={styles.buttonText}>Conceder permiso</Text>
+        </TouchableOpacity>
+      </View>
+    );
+  }
+
+  if (loading && filteredAssets.length === 0) {
+    return (
+      <View style={styles.center}>
+        <ActivityIndicator size="large" color={COLORS.primary} />
+        <Text style={styles.subtitle}>Cargando {albumTitle}...</Text>
+      </View>
+    );
+  }
+
+  if (filteredAssets.length === 0) {
+    return (
+      <View style={styles.center}>
+        <Text style={styles.title}>{albumTitle}</Text>
+        <Text style={styles.subtitle}>Este album no tiene elementos.</Text>
+      </View>
+    );
+  }
+
+  return (
+    <View style={styles.container}>
+      <View style={styles.header}>
+        <TouchableOpacity onPress={() => router.back()} style={styles.backButton}>
+          <ArrowLeft color={COLORS.text} size={20} />
+        </TouchableOpacity>
+        <Text numberOfLines={1} style={styles.headerTitle}>{albumTitle}</Text>
+        <View style={styles.backButton} />
+      </View>
+
+      {selectionMode ? (
+        <View style={styles.selectionBar}>
+          <Text style={styles.selectionCount}>{selectedIds.length} seleccionadas</Text>
+          {bulkProcessing ? (
+            <Text style={styles.processingText}>Procesando {processingCurrent}/{processingTotal}</Text>
+          ) : null}
+          <View style={styles.selectionActions}>
+            <TouchableOpacity style={styles.selectionButton} onPress={() => setShowAlbumModal(true)}>
+              <FolderInput size={18} color={COLORS.text} />
+              <Text style={styles.selectionButtonText}>Album</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.selectionButton} onPress={handlePrivateSelected} disabled={bulkProcessing}>
+              <Lock size={18} color={COLORS.text} />
+              <Text style={styles.selectionButtonText}>{bulkProcessing ? 'Procesando...' : 'Privar'}</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.selectionButton} onPress={handleShareSelected}>
+              <Share2 size={18} color={COLORS.text} />
+              <Text style={styles.selectionButtonText}>Compartir</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.selectionButton, styles.selectionDelete, bulkProcessing && styles.selectionButtonDisabled]}
+              onPress={handleDeleteSelected}
+              disabled={bulkProcessing}
+            >
+              <Trash2 size={18} color={COLORS.text} />
+              <Text style={styles.selectionButtonText}>{bulkProcessing ? 'Procesando...' : 'Borrar'}</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.selectionButton} onPress={clearSelection}>
+              <X size={18} color={COLORS.text} />
+              <Text style={styles.selectionButtonText}>Cancelar</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      ) : null}
+
+      <PhotoGrid
+        listKey={`album-${String(albumId || 'unknown')}`}
+        photos={filteredAssets}
+        loading={loading}
+        onLoadMore={handleLoadMore}
+        onPhotoPress={(asset) => {
+          if (selectionMode) {
+            toggleSelection(asset.id);
+            return;
+          }
+
+          const assetIndex = filteredAssets.findIndex((item) => item.id === asset.id);
+          setGallerySession(filteredAssets);
+          router.push({
+            pathname: `/photo/${asset.id}`,
+            params: {
+              uri: asset.uri,
+              filename: asset.filename,
+              index: String(assetIndex < 0 ? 0 : assetIndex),
+            },
+          });
+        }}
+        onPhotoLongPress={(asset) => {
+          if (!selectionMode) {
+            setSelectionMode(true);
+            setSelectedIds([asset.id]);
+            return;
+          }
+          toggleSelection(asset.id);
+        }}
+        selectionMode={selectionMode}
+        selectedIds={selectedIds}
+      />
+
+      <AlbumManagerModal
+        visible={showAlbumModal}
+        processing={bulkProcessing}
+        albums={albums}
+        loadingAlbums={loadingAlbums}
+        onClose={() => setShowAlbumModal(false)}
+        onMoveToAlbum={handleMoveToAlbum}
+        onCreateAlbum={handleCreateAlbum}
+      />
+    </View>
+  );
+}
+
+const styles = StyleSheet.create({
+  container: {
+    flex: 1,
+    backgroundColor: COLORS.background,
+  },
+  header: {
+    height: 60,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: SPACING.md,
+    borderBottomWidth: 1,
+    borderBottomColor: COLORS.border,
+  },
+  backButton: {
+    width: 40,
+    height: 40,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  headerTitle: {
+    flex: 1,
+    color: COLORS.text,
+    fontSize: 16,
+    fontWeight: '700',
+    textAlign: 'center',
+  },
+  center: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: SPACING.xl,
+    backgroundColor: COLORS.background,
+  },
+  title: {
+    fontSize: 22,
+    fontWeight: '700',
+    color: COLORS.text,
+    textAlign: 'center',
+  },
+  subtitle: {
+    marginTop: SPACING.md,
+    color: COLORS.textMuted,
+    textAlign: 'center',
+    fontSize: 14,
+  },
+  button: {
+    marginTop: SPACING.lg,
+    backgroundColor: COLORS.primary,
+    paddingHorizontal: SPACING.xl,
+    paddingVertical: SPACING.md,
+    borderRadius: 8,
+  },
+  buttonText: {
+    color: COLORS.background,
+    fontWeight: '600',
+    fontSize: 16,
+  },
+  selectionBar: {
+    borderBottomWidth: 1,
+    borderBottomColor: COLORS.border,
+    paddingHorizontal: SPACING.md,
+    paddingVertical: SPACING.sm,
+    backgroundColor: COLORS.surface,
+  },
+  selectionCount: {
+    color: COLORS.text,
+    fontSize: 14,
+    fontWeight: '700',
+    marginBottom: 8,
+  },
+  processingText: {
+    color: COLORS.textMuted,
+    fontSize: 12,
+    marginBottom: 8,
+  },
+  selectionActions: {
+    flexDirection: 'row',
+    gap: SPACING.sm,
+  },
+  selectionButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    borderRadius: 10,
+    backgroundColor: COLORS.border,
+  },
+  selectionDelete: {
+    backgroundColor: COLORS.error,
+  },
+  selectionButtonDisabled: {
+    opacity: 0.65,
+  },
+  selectionButtonText: {
+    color: COLORS.text,
+    fontSize: 12,
+    fontWeight: '600',
+  },
+});

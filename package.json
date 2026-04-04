@@ -7,22 +7,29 @@
     "start": "expo start",
     "android": "expo start --android",
     "dev": "expo start --lan",
-    "tunnel": "expo start --tunnel"
+    "tunnel": "expo start --tunnel",
+    "postinstall": "node scripts/fix-tsconfig-aliases.cjs"
   },
   "dependencies": {
     "@google/genai": "^1.29.0",
     "@react-navigation/drawer": "^7.9.8",
     "@react-navigation/native": "^7.2.2",
     "@shopify/flash-list": "2.0.2",
+    "crypto-js": "^4.2.0",
     "expo": "~54.0.0",
+    "expo-av": "~16.0.8",
     "expo-constants": "~18.0.0",
+    "expo-crypto": "^55.0.12",
+    "expo-dev-client": "~6.0.20",
     "expo-image": "~3.0.11",
     "expo-linking": "~8.0.11",
     "expo-media-library": "~18.2.1",
     "expo-router": "~6.0.0",
+    "expo-sharing": "^55.0.16",
     "expo-sqlite": "~16.0.0",
     "lucide-react-native": "^1.7.0",
     "react": "19.1.0",
+    "react-dom": "19.1.0",
     "react-native": "0.81.5",
     "react-native-gesture-handler": "~2.28.0",
     "react-native-reanimated": "~4.1.1",
@@ -32,8 +39,10 @@
     "react-native-worklets": "0.5.1"
   },
   "devDependencies": {
+    "@types/crypto-js": "^4.2.2",
     "@types/react": "~19.1.10",
     "babel-preset-expo": "~54.0.0",
+    "expo-module-scripts": "^55.0.2",
     "typescript": "~5.9.2"
   }
 }

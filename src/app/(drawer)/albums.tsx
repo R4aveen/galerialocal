@@ -4,10 +4,12 @@ import { COLORS, SPACING } from '../../constants/theme';
 import { useAlbums, AlbumWithCover } from '../../hooks/useAlbums';
 import { usePermissions } from '../../hooks/usePermissions';
 import AlbumCard from '../../components/AlbumCard';
+import { useRouter } from 'expo-router';
 
 export default function AlbumsScreen() {
   const { isGranted, isUnsupportedExpoGo } = usePermissions();
   const { albums, loading } = useAlbums(isGranted);
+  const router = useRouter();
 
   if (isUnsupportedExpoGo) {
     return (
@@ -45,7 +47,12 @@ export default function AlbumsScreen() {
         renderItem={({ item }) => (
           <AlbumCard 
             album={item} 
-            onPress={(album) => console.log('Album pressed:', album.title)} 
+            onPress={(album) =>
+              router.push({
+                pathname: '/album/[id]',
+                params: { id: album.id, title: album.title || 'Album' },
+              })
+            }
           />
         )}
         keyExtractor={(item) => item.id}

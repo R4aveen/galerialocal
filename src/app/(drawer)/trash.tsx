@@ -10,20 +10,48 @@ export default function TrashScreen() {
 
   const renderItem = ({ item }: { item: TrashItem }) => (
     <View style={styles.itemCard}>
-      <Image source={{ uri: item.uri }} style={styles.thumbnail} />
+      {item.uri ? (
+        <Image source={{ uri: item.uri }} style={styles.thumbnail} />
+      ) : (
+        <View style={[styles.thumbnail, styles.thumbnailPlaceholder]} />
+      )}
       <View style={styles.itemInfo}>
         <Text style={styles.filename} numberOfLines={1}>{item.filename}</Text>
         <Text style={styles.date}>Eliminado hace {Math.round((Date.now() - item.deleted_at) / (1000 * 60 * 60 * 24))} días</Text>
+        {!item.recoverable ? (
+          <Text style={styles.warningText}>No recuperable (archivo origen sin permisos de lectura)</Text>
+        ) : null}
       </View>
       <View style={styles.actions}>
-        <TouchableOpacity onPress={() => restoreFromTrash(item)} style={styles.actionButton}>
+        <TouchableOpacity
+          onPress={() => {
+            if (!item.recoverable) {
+              Alert.alert('No se puede restaurar', 'Este archivo no se pudo copiar a la papelera privada por permisos del sistema.');
+              return;
+            }
+            restoreFromTrash(item);
+          }}
+          style={styles.actionButton}
+        >
           <RotateCcw size={20} color={COLORS.primary} />
         </TouchableOpacity>
         <TouchableOpacity 
           onPress={() => {
             Alert.alert('Borrar permanentemente', 'Esta acción no se puede deshacer.', [
               { text: 'Cancelar', style: 'cancel' },
-              { text: 'Borrar', style: 'destructive', onPress: () => deletePermanently(item) }
+              {
+                text: 'Borrar',
+                style: 'destructive',
+                onPress: async () => {
+                  const success = await deletePermanently(item);
+                  if (!success) {
+                    Alert.alert(
+                      'No se pudo borrar del sistema',
+                      'Android no permitió eliminar el archivo de la galería. Intenta de nuevo y confirma el diálogo del sistema si aparece.'
+                    );
+                  }
+                },
+              }
             ]);
           }} 
           style={styles.actionButton}
@@ -85,6 +113,9 @@ const styles = StyleSheet.create({
     height: 60,
     borderRadius: 8,
   },
+  thumbnailPlaceholder: {
+    backgroundColor: COLORS.border,
+  },
   itemInfo: {
     flex: 1,
     marginLeft: SPACING.md,
@@ -98,6 +129,11 @@ const styles = StyleSheet.create({
     color: COLORS.textMuted,
     fontSize: 12,
     marginTop: 2,
+  },
+  warningText: {
+    color: COLORS.error,
+    fontSize: 11,
+    marginTop: 4,
   },
   actions: {
     flexDirection: 'row',
