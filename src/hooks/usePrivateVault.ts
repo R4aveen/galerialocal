@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import * as FileSystem from 'expo-file-system/legacy';
 import * as MediaLibrary from 'expo-media-library';
+import { dedupeAssetsById } from '../utils/mediaAssets';
 
 export type PrivateItemStatus = 'active' | 'archived' | 'trash';
 
@@ -122,7 +123,7 @@ export function usePrivateVault() {
       after = page.endCursor;
     }
 
-    return allAssets;
+    return dedupeAssetsById(allAssets);
   }, []);
 
   const migrateFromMediaAlbumIfNeeded = useCallback(async () => {

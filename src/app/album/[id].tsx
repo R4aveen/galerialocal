@@ -16,6 +16,7 @@ import { useAlbumManager } from '../../hooks/useAlbumManager';
 import { setGallerySession } from '../../store/gallerySession';
 import { useSelectionStore } from '../../store/useSelectionStore';
 import { usePhotoSelectionHandlers } from '../../hooks/usePhotoSelectionHandlers';
+import { dedupeAssetsById } from '../../utils/mediaAssets';
 
 const PAGE_SIZE = 50;
 
@@ -25,7 +26,7 @@ export default function AlbumDetailScreen() {
   const albumTitle = params.title || 'Album';
   const router = useRouter();
   const insets = useSafeAreaInsets();
-  const { isGranted, isLimited, requestPermission, isUnsupportedExpoGo, checkPermissions } = usePermissions();
+  const { isGranted, isLimited, requestPermission, isUnsupportedExpoGo, checkPermissions, requestFullAccessAgain } = usePermissions();
   const { getTrashIds, refreshTrash, moveManyToTrash } = useTrash();
   const { getPrivateIds, refreshPrivate, hideManyInPrivate } = usePrivateVault();
   const { albums, loading: loadingAlbums, refreshAlbums, moveAssetsToAlbum, createAlbumFromAssets } = useAlbumManager(Boolean(isGranted));
@@ -76,6 +77,15 @@ export default function AlbumDetailScreen() {
         <TouchableOpacity
           style={styles.button}
           onPress={async () => {
+            await requestFullAccessAgain();
+            await checkPermissions();
+          }}
+        >
+          <Text style={styles.buttonText}>Permitir todas las fotos</Text>
+        </TouchableOpacity>
+        <TouchableOpacity
+          style={[styles.button, styles.secondaryButton]}
+          onPress={async () => {
             await Linking.openSettings();
             await checkPermissions();
           }}
@@ -100,7 +110,10 @@ export default function AlbumDetailScreen() {
           sortBy: [[MediaLibrary.SortBy.creationTime, false]],
         });
 
-        setAssets((prev) => (after ? [...prev, ...result.assets] : result.assets));
+        setAssets((prev) => {
+          const merged = after ? [...prev, ...result.assets] : result.assets;
+          return dedupeAssetsById(merged);
+        });
         setHasNextPage(result.hasNextPage);
         setEndCursor(result.endCursor);
       } catch (error) {
@@ -471,6 +484,10 @@ const styles = StyleSheet.create({
     color: COLORS.background,
     fontWeight: '600',
     fontSize: 16,
+  },
+  secondaryButton: {
+    marginTop: SPACING.sm,
+    backgroundColor: COLORS.border,
   },
   selectionBar: {
     borderBottomWidth: 1,

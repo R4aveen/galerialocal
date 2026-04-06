@@ -7,7 +7,7 @@ import AlbumCard from '../../components/AlbumCard';
 import { useRouter } from 'expo-router';
 
 export default function AlbumsScreen() {
-  const { isGranted, isLimited, isUnsupportedExpoGo, checkPermissions } = usePermissions();
+  const { isGranted, isLimited, isUnsupportedExpoGo, checkPermissions, requestFullAccessAgain } = usePermissions();
   const { albums, loading } = useAlbums(isGranted);
   const router = useRouter();
 
@@ -32,6 +32,15 @@ export default function AlbumsScreen() {
         </Text>
         <TouchableOpacity
           style={styles.button}
+          onPress={async () => {
+            await requestFullAccessAgain();
+            await checkPermissions();
+          }}
+        >
+          <Text style={styles.buttonText}>Permitir todas las fotos</Text>
+        </TouchableOpacity>
+        <TouchableOpacity
+          style={[styles.button, styles.secondaryButton]}
           onPress={async () => {
             await Linking.openSettings();
             await checkPermissions();
@@ -118,6 +127,10 @@ const styles = StyleSheet.create({
   buttonText: {
     color: COLORS.background,
     fontWeight: '700',
+  },
+  secondaryButton: {
+    marginTop: SPACING.sm,
+    backgroundColor: COLORS.border,
   },
   list: {
     padding: SPACING.md,

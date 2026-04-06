@@ -30,7 +30,7 @@ import { useSelectionStore } from '../../store/useSelectionStore';
 import { usePhotoSelectionHandlers } from '../../hooks/usePhotoSelectionHandlers';
 
 export default function AllPhotosScreen() {
-  const { isGranted, isLimited, requestPermission, isUnsupportedExpoGo, checkPermissions } = usePermissions();
+  const { isGranted, isLimited, requestPermission, isUnsupportedExpoGo, checkPermissions, requestFullAccessAgain } = usePermissions();
 
   if (isUnsupportedExpoGo) {
     return (
@@ -56,8 +56,17 @@ export default function AllPhotosScreen() {
             Android te dio acceso solo a fotos seleccionadas. Para ver TODAS las imagenes del dispositivo (incluyendo
             WhatsApp), habilita "Permitir todas las fotos" en Ajustes.
           </Text>
+            <TouchableOpacity
+              style={styles.button}
+              onPress={async () => {
+                await requestFullAccessAgain();
+                await checkPermissions();
+              }}
+            >
+              <Text style={styles.buttonText}>Permitir todas las fotos</Text>
+            </TouchableOpacity>
           <TouchableOpacity
-            style={styles.button}
+            style={[styles.button, styles.secondaryButton]}
             onPress={async () => {
               await Linking.openSettings();
               await checkPermissions();
@@ -726,5 +735,9 @@ const styles = StyleSheet.create({
   emptyButtonText: {
     color: COLORS.background,
     fontWeight: '700',
+  },
+  secondaryButton: {
+    marginTop: SPACING.sm,
+    backgroundColor: COLORS.border,
   },
 });

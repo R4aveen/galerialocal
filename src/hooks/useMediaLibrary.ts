@@ -2,6 +2,7 @@ import * as MediaLibrary from 'expo-media-library';
 import GaleriaMedia from '../../modules/galeria-media';
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { getSafeAssetTimestamp, hydrateTimestampCache, sortAssetsByTimestamp } from '../utils/mediaDate';
+import { dedupeAssetsById } from '../utils/mediaAssets';
 
 export type MediaFilter = 'all' | 'photo' | 'video' | 'screenshot';
 export type DateFilter = 'all' | 'month' | 'year';
@@ -118,12 +119,12 @@ export function useMediaLibrary(isGranted: boolean, options: UseMediaLibraryOpti
       // Prevenimos repetidos deduplicando mediante Map por asset.id.
       // (Esto neutraliza el bug nativo de Android donde devuelve fotos duplicadas en saltos de paginación)
       const mergedBaseRaw = after ? [...assetsRef.current, ...nextAssets] : nextAssets;
-      const mergedBase = Array.from(new Map(mergedBaseRaw.map(item => [item.id, item])).values());
+      const mergedBase = dedupeAssetsById(mergedBaseRaw);
 
       // Show assets IMMEDIATELY without sorting (already ordered by MediaLibrary):
       setAssets((prev) => {
         const merged = after ? [...prev, ...nextAssets] : nextAssets;
-        const uniqueAssets = Array.from(new Map(merged.map(item => [item.id, item])).values());
+        const uniqueAssets = dedupeAssetsById(merged);
         const ordered = sortByCreationTime(uniqueAssets, options.sortOrder);
         assetsRef.current = ordered;
         updateCacheEntry(cacheKey, {
@@ -181,7 +182,7 @@ export function useMediaLibrary(isGranted: boolean, options: UseMediaLibraryOpti
     
     // Show cached assets IMMEDIATELY without sorting:
     if (cached) {
-      const orderedCached = sortByCreationTime(cached.assets, options.sortOrder);
+      const orderedCached = sortByCreationTime(dedupeAssetsById(cached.assets), options.sortOrder);
       assetsRef.current = orderedCached;
       loadingRef.current = false;
       setAssets(orderedCached);
@@ -220,10 +221,10 @@ export function useMediaLibrary(isGranted: boolean, options: UseMediaLibraryOpti
     const excludeSet = new Set(options.excludeIds || []);
 
     if (options.mediaFilter === 'all' && options.dateFilter === 'all' && excludeSet.size === 0) {
-      return assets;
+      return dedupeAssetsById(assets);
     }
 
-    return assets.filter((asset) => {
+    return dedupeAssetsById(assets).filter((asset) => {
       // Exclude items that are in trash
       if (excludeSet.has(asset.id)) return false;
 
