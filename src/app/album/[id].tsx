@@ -149,7 +149,7 @@ export default function AlbumDetailScreen() {
   }, [assets, getTrashIds, getPrivateIds, optimisticHiddenIds]);
 
   const selectedAssets = useMemo(
-    () => filteredAssets.filter((asset) => selectedIds.includes(asset.id)),
+    () => filteredAssets.filter((asset) => selectedIds.includes(getAssetIdentityKey(asset))),
     [filteredAssets, selectedIds]
   );
 

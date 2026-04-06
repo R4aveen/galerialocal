@@ -44,12 +44,14 @@ function PhotoGrid({
   const { colors, mode } = useAppTheme();
   const styles = useMemo(() => createStyles(colors, mode), [colors, mode]);
   const listRef = useRef<FlashListRef<GridRow> | null>(null);
+  const containerRef = useRef<View | null>(null);
   const dragSelecting = useSelectionStore(state => state.dragSelecting);
   const hideOverlayTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const autoScrollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const autoScrollDirRef = useRef<-1 | 0 | 1>(0);
   const autoScrollTouchYRef = useRef<number | null>(null);
   const containerHeightRef = useRef(0);
+  const containerOriginRef = useRef({ x: 0, y: 0 });
   const dragActivationTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const dragTouchStartRef = useRef<{ x: number; y: number } | null>(null);
   const dragTouchActivatedRef = useRef(false);
@@ -71,6 +73,15 @@ function PhotoGrid({
 
   const scrollOffsetRef = useRef(0);
   const lastDragSelectedIdRef = useRef<string | null>(null);
+
+  const toContainerPoint = useCallback((touch: any) => {
+    const pageX = Number(touch?.pageX ?? 0);
+    const pageY = Number(touch?.pageY ?? 0);
+    return {
+      x: pageX - containerOriginRef.current.x,
+      y: pageY - containerOriginRef.current.y,
+    };
+  }, []);
 
   const skeletonRows = useMemo<GridSkeletonRow[]>(() => {
     if (!loading) return [];
@@ -381,15 +392,10 @@ function PhotoGrid({
   const handleTouchStart = useCallback((event: any) => {
     const touch = event?.nativeEvent?.touches?.[0];
     if (!touch) return;
-
     const state = useSelectionStore.getState();
-    if (state.selectionMode) {
-      dragTouchActivatedRef.current = true;
-      beginDragSelectingAt(touch.locationX, touch.locationY);
-      return;
-    }
+    const point = toContainerPoint(touch);
 
-    dragTouchStartRef.current = { x: touch.locationX, y: touch.locationY };
+    dragTouchStartRef.current = { x: point.x, y: point.y };
     dragTouchActivatedRef.current = false;
     clearDragActivationTimer();
 
@@ -398,15 +404,16 @@ function PhotoGrid({
       if (!point) return;
       dragTouchActivatedRef.current = true;
       beginDragSelectingAt(point.x, point.y);
-    }, 280);
-  }, [beginDragSelectingAt, clearDragActivationTimer]);
+    }, state.selectionMode ? 160 : 280);
+  }, [beginDragSelectingAt, clearDragActivationTimer, toContainerPoint]);
 
   const handleTouchMove = useCallback((event: any) => {
     const touch = event?.nativeEvent?.touches?.[0];
     if (!touch) return;
 
-    const x = touch.locationX;
-    const y = touch.locationY;
+    const point = toContainerPoint(touch);
+    const x = point.x;
+    const y = point.y;
     const start = dragTouchStartRef.current;
 
     if (!dragTouchActivatedRef.current) {
@@ -421,7 +428,7 @@ function PhotoGrid({
     }
 
     updateDragSelectingAt(x, y);
-  }, [clearDragActivationTimer, updateDragSelectingAt]);
+  }, [clearDragActivationTimer, toContainerPoint, updateDragSelectingAt]);
 
   const finishTouchDrag = useCallback(() => {
     clearDragActivationTimer();
@@ -433,9 +440,15 @@ function PhotoGrid({
 
   return (
       <View
+        ref={containerRef}
         style={styles.container}
         onLayout={(e) => {
           containerHeightRef.current = e.nativeEvent.layout.height;
+          requestAnimationFrame(() => {
+            containerRef.current?.measureInWindow((x, y) => {
+              containerOriginRef.current = { x, y };
+            });
+          });
         }}
         onTouchStart={handleTouchStart}
         onTouchMove={handleTouchMove}

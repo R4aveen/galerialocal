@@ -17,6 +17,7 @@ import AlbumManagerModal from '../../components/AlbumManagerModal';
 import { usePhotoSelectionHandlers } from '../../hooks/usePhotoSelectionHandlers';
 import { prepareShareUris, sharePreparedUris } from '../../utils/shareMedia';
 import { ThemeColors, useAppTheme } from '../../theme/AppThemeContext';
+import { getAssetIdentityKey } from '../../utils/mediaAssets';
 
 type PrivateTab = 'active' | 'archived' | 'trash';
 
@@ -169,7 +170,17 @@ export default function PrivateScreen() {
   );
 
   const selectedPrivateItems = useMemo(
-    () => visiblePrivateItems.filter((item) => selectedIds.includes(item.id)),
+    () =>
+      visiblePrivateItems.filter((item) =>
+        selectedIds.includes(
+          getAssetIdentityKey({
+            id: item.id,
+            uri: item.uri,
+            filename: item.filename,
+            creationTime: item.hiddenAt,
+          } as any)
+        )
+      ),
     [visiblePrivateItems, selectedIds]
   );
 

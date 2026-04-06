@@ -27,6 +27,7 @@ import {
   Trash2,
   Volume2,
   X,
+  Pencil,
 } from 'lucide-react-native';
 import * as MediaLibrary from 'expo-media-library';
 import ConfirmationModal from '../../components/ConfirmationModal';
@@ -116,6 +117,8 @@ export default function PhotoDetailScreen() {
   const [editWidth, setEditWidth] = useState(0);
   const [editHeight, setEditHeight] = useState(0);
   const [editingBusy, setEditingBusy] = useState(false);
+  const [editingMode, setEditingMode] = useState(false);
+  const [editorUnavailable, setEditorUnavailable] = useState(false);
 
   const videoRef = useRef<Video | null>(null);
   const isSeekingRef = useRef(false);
@@ -189,6 +192,8 @@ export default function PhotoDetailScreen() {
     setEditWidth(currentAsset.width || 0);
     setEditHeight(currentAsset.height || 0);
     setEditingBusy(false);
+    setEditingMode(false);
+    setEditorUnavailable(false);
     chromeOpacity.value = withTiming(1, { duration: 140 });
   };
 
@@ -197,6 +202,8 @@ export default function PhotoDetailScreen() {
     setEditWidth(currentAsset.width || 0);
     setEditHeight(currentAsset.height || 0);
     setEditingBusy(false);
+    setEditingMode(false);
+    setEditorUnavailable(false);
   }, [currentAsset.id, currentAsset.height, currentAsset.width]);
 
   useEffect(() => {
@@ -258,7 +265,7 @@ export default function PhotoDetailScreen() {
   };
 
   const applyEditActions = async (actions: any[]) => {
-    if (isVideo || editingBusy) return;
+    if (isVideo || editingBusy || editorUnavailable) return;
     if (!ImageManipulatorModule?.manipulateAsync) {
       Alert.alert('Editor no disponible', 'Actualiza/reinstala el build para habilitar la edicion de fotos.');
       return;
@@ -276,7 +283,18 @@ export default function PhotoDetailScreen() {
       setEditHeight(result.height || editHeight);
     } catch (error) {
       console.error('Error applying image edit:', error);
-      Alert.alert('Error', 'No se pudo aplicar esta edicion.');
+      const message = error instanceof Error ? error.message : String(error);
+      if (message.includes('NoSuchMethodError') || message.includes('getRuntimeContext')) {
+        setEditorUnavailable(true);
+        setEditingMode(false);
+        ImageManipulatorModule = null;
+        Alert.alert(
+          'Editor no disponible',
+          'El editor de imagenes no es compatible con este build actual. Reinstala la app con el build nuevo para habilitarlo.'
+        );
+      } else {
+        Alert.alert('Error', 'No se pudo aplicar esta edicion.');
+      }
     } finally {
       setEditingBusy(false);
     }
@@ -635,6 +653,16 @@ export default function PhotoDetailScreen() {
             <Pressable onPress={handleShare} style={styles.iconButton} hitSlop={8}>
               <Share2 color={COLORS.text} size={24} />
             </Pressable>
+            {!isVideo ? (
+              <Pressable
+                onPress={() => setEditingMode((prev) => !prev)}
+                style={[styles.iconButton, editingMode ? styles.editToggleActive : null]}
+                hitSlop={8}
+                disabled={editorUnavailable}
+              >
+                <Pencil color={editingMode ? COLORS.background : COLORS.text} size={22} />
+              </Pressable>
+            ) : null}
             <Pressable onPress={handleDelete} style={styles.iconButton} hitSlop={8}>
               <Trash2 color={COLORS.error} size={24} />
             </Pressable>
@@ -877,7 +905,7 @@ export default function PhotoDetailScreen() {
       ) : null}
 
       <Animated.View pointerEvents={chromeVisible ? 'auto' : 'none'} style={[styles.footer, chromeAnimatedStyle]}>
-        {!isVideo ? (
+        {!isVideo && editingMode ? (
           <View style={styles.editActionsRow}>
             <Pressable onPress={cropCenterSquare} style={styles.editActionButton} disabled={editingBusy}>
               <Crop color={COLORS.textMuted} size={16} />
@@ -986,6 +1014,10 @@ const styles = StyleSheet.create({
   iconButton: {
     padding: 8,
     marginLeft: 8,
+  },
+  editToggleActive: {
+    backgroundColor: COLORS.primary,
+    borderRadius: 12,
   },
   imageContainer: {
     flex: 1,

@@ -178,7 +178,7 @@ function GalleryEngine({ isGranted, requestPermission }: any) {
   );
 
   const selectedAssets = useMemo(
-    () => assets.filter((asset) => selectedIds.includes(asset.id)),
+    () => assets.filter((asset) => selectedIds.includes(getAssetIdentityKey(asset))),
     [assets, selectedIds]
   );
 
@@ -379,7 +379,7 @@ function GalleryEngine({ isGranted, requestPermission }: any) {
             if (selectedIds.length === assets.length) {
               clearSelection();
             } else {
-              useSelectionStore.getState().selectAll(assets.map(a => a.id));
+              useSelectionStore.getState().selectAll(assets.map(a => getAssetIdentityKey(a)));
             }
           }}>
             <Text style={styles.selectAllText}>{selectedIds.length === assets.length ? 'Desmarcar' : 'Elegir todo'}</Text>
