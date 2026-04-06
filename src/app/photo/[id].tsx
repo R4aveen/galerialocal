@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { Alert, Dimensions, Pressable, ScrollView, Share, StyleSheet, Text, View, type ViewStyle } from 'react-native';
+import { Alert, Dimensions, Pressable, ScrollView, StyleSheet, Text, View, type ViewStyle } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { Image } from 'expo-image';
 import { ResizeMode, Video, type AVPlaybackStatus } from 'expo-av';
@@ -18,6 +18,7 @@ import { COLORS, SPACING } from '../../constants/theme';
 import { usePrivateVault } from '../../hooks/usePrivateVault';
 import { useTrash } from '../../hooks/useTrash';
 import { getGallerySession, removeAssetFromGallerySession } from '../../store/gallerySession';
+import { prepareShareUri, sharePreparedUri } from '../../utils/shareMedia';
 
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
 
@@ -441,9 +442,15 @@ export default function PhotoDetailScreen() {
 
   const handleShare = async () => {
     try {
-      await Share.share({ url: uri });
+      const shareUri = await prepareShareUri({
+        assetId: currentAsset?.id,
+        fallbackUri: uri,
+        filename: currentAsset?.filename,
+      });
+      await sharePreparedUri(shareUri, 'Compartir archivo');
     } catch (error) {
       console.error('Error sharing:', error);
+      Alert.alert('Error al compartir', 'No se pudo compartir este archivo.');
     }
   };
 

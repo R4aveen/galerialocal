@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { ActivityIndicator, Alert, Share, StyleSheet, Text, TouchableOpacity, View, Linking } from 'react-native';
+import { ActivityIndicator, Alert, StyleSheet, Text, TouchableOpacity, View, Linking } from 'react-native';
 import * as MediaLibrary from 'expo-media-library';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { ArrowLeft, CameraOff, FolderInput, Lock, Share2, Trash2, X } from 'lucide-react-native';
@@ -17,6 +17,7 @@ import { setGallerySession } from '../../store/gallerySession';
 import { useSelectionStore } from '../../store/useSelectionStore';
 import { usePhotoSelectionHandlers } from '../../hooks/usePhotoSelectionHandlers';
 import { dedupeAssetsById } from '../../utils/mediaAssets';
+import { prepareShareUri, sharePreparedUri } from '../../utils/shareMedia';
 
 const PAGE_SIZE = 50;
 
@@ -178,12 +179,17 @@ export default function AlbumDetailScreen() {
       if (selectedAssets.length > 1) {
         Alert.alert('Compartir', 'Por ahora se comparte un archivo a la vez. Se abrira el primero seleccionado.');
       }
-      await Share.share({
-        title: 'Compartir archivo',
-        url: selectedAssets[0].uri,
+
+      const item = selectedAssets[0];
+      const shareUri = await prepareShareUri({
+        assetId: item.id,
+        fallbackUri: item.uri,
+        filename: item.filename,
       });
+      await sharePreparedUri(shareUri, 'Compartir archivo');
     } catch (error) {
       console.error('Error sharing selected album assets:', error);
+      Alert.alert('Error al compartir', 'No se pudo compartir el archivo seleccionado.');
     }
   };
 

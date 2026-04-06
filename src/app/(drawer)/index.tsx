@@ -3,7 +3,6 @@ import {
   ActivityIndicator,
   Alert,
   AppState,
-  Share,
   Linking,
   StyleSheet,
   View,
@@ -28,6 +27,7 @@ import { useRouter } from 'expo-router';
 import { setGallerySession } from '../../store/gallerySession';
 import { useSelectionStore } from '../../store/useSelectionStore';
 import { usePhotoSelectionHandlers } from '../../hooks/usePhotoSelectionHandlers';
+import { prepareShareUri, sharePreparedUri } from '../../utils/shareMedia';
 
 export default function AllPhotosScreen() {
   const { isGranted, isLimited, requestPermission, isUnsupportedExpoGo, checkPermissions, requestFullAccessAgain } = usePermissions();
@@ -221,12 +221,17 @@ function GalleryEngine({ isGranted, requestPermission }: any) {
       if (selectedAssets.length > 1) {
         Alert.alert('Compartir', 'Por ahora se comparte un archivo a la vez. Se abrira el primero seleccionado.');
       }
-      await Share.share({
-        title: 'Compartir archivo',
-        url: selectedAssets[0].uri,
+
+      const item = selectedAssets[0];
+      const shareUri = await prepareShareUri({
+        assetId: item.id,
+        fallbackUri: item.uri,
+        filename: item.filename,
       });
+      await sharePreparedUri(shareUri, 'Compartir archivo');
     } catch (error) {
       console.error('Error sharing selected assets:', error);
+      Alert.alert('Error al compartir', 'No se pudo compartir el archivo seleccionado.');
     }
   };
 
