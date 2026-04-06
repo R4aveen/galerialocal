@@ -4,7 +4,7 @@ import * as MediaLibrary from 'expo-media-library';
 import * as FileSystem from 'expo-file-system/legacy';
 import { useRouter } from 'expo-router';
 import { useFocusEffect } from '@react-navigation/native';
-import { Archive, FolderInput, Lock, RotateCcw, Share2, Trash2, X, Settings } from 'lucide-react-native';
+import { Archive, FolderInput, Lock, RotateCcw, Share2, Trash2, X, Settings, MoreVertical } from 'lucide-react-native';
 import { COLORS, SPACING } from '../../constants/theme';
 import { usePrivateVault } from '../../hooks/usePrivateVault';
 import { useAlbumManager } from '../../hooks/useAlbumManager';
@@ -47,6 +47,7 @@ export default function PrivateScreen() {
   const [processingCurrent, setProcessingCurrent] = useState(0);
   const [processingTotal, setProcessingTotal] = useState(0);
   const [showAlbumModal, setShowAlbumModal] = useState(false);
+  const [showActionMenu, setShowActionMenu] = useState(false);
   const [pinInput, setPinInput] = useState('');
   const [newPinInput, setNewPinInput] = useState('');
   const [confirmPinInput, setConfirmPinInput] = useState('');
@@ -561,47 +562,19 @@ export default function PrivateScreen() {
       </View>
 
       {selectionMode ? (
-        <View style={styles.selectionBar}>
-          <Text style={styles.selectionCount}>{selectedIds.length} seleccionadas</Text>
-          {processing ? (
-            <Text style={styles.processingText}>Procesando {processingCurrent}/{processingTotal}</Text>
-          ) : null}
-          <View style={styles.selectionActions}>
-            {activeTab !== 'trash' ? (
-              <TouchableOpacity style={styles.selectionButton} onPress={handleShareSelected} disabled={processing}>
-                <Share2 size={18} color={COLORS.text} />
-                <Text style={styles.selectionButtonText}>Compartir</Text>
-              </TouchableOpacity>
+        <View style={[styles.selectionBar, { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }]}>
+          <View>
+            <Text style={[styles.selectionCount, { marginBottom: 0 }]}>{selectedIds.length} seleccionadas</Text>
+            {processing ? (
+              <Text style={[styles.processingText, { marginBottom: 0 }]}>Procesando {processingCurrent}/{processingTotal}</Text>
             ) : null}
-            {activeTab === 'active' ? (
-              <TouchableOpacity style={styles.selectionButton} onPress={handleArchiveSelected} disabled={processing}>
-                <Archive size={18} color={COLORS.text} />
-                <Text style={styles.selectionButtonText}>Archivar</Text>
-              </TouchableOpacity>
-            ) : null}
-            {activeTab !== 'trash' ? (
-              <TouchableOpacity style={styles.selectionButton} onPress={() => setShowAlbumModal(true)} disabled={processing}>
-                <FolderInput size={18} color={COLORS.text} />
-                <Text style={styles.selectionButtonText}>Album</Text>
-              </TouchableOpacity>
-            ) : null}
-            {activeTab === 'archived' ? (
-              <TouchableOpacity style={styles.selectionButton} onPress={handleRestoreArchivedSelected} disabled={processing}>
-                <RotateCcw size={18} color={COLORS.text} />
-                <Text style={styles.selectionButtonText}>Desarchivar</Text>
-              </TouchableOpacity>
-            ) : null}
-            <TouchableOpacity style={styles.selectionButton} onPress={() => handleRestoreSelected()} disabled={processing}>
-              <RotateCcw size={18} color={COLORS.text} />
-              <Text style={styles.selectionButtonText}>{activeTab === 'trash' ? 'Restaurar' : 'Sacar'}</Text>
+          </View>
+          <View style={{ flexDirection: 'row', gap: SPACING.sm }}>
+            <TouchableOpacity style={styles.headerButton} onPress={() => setShowActionMenu(true)} disabled={processing}>
+              <MoreVertical size={20} color={COLORS.text} />
             </TouchableOpacity>
-            <TouchableOpacity style={[styles.selectionButton, styles.selectionDelete]} onPress={handleDeleteSelected} disabled={processing}>
-              <Trash2 size={18} color={COLORS.text} />
-              <Text style={styles.selectionButtonText}>{activeTab === 'trash' ? 'Eliminar' : 'Papelera'}</Text>
-            </TouchableOpacity>
-            <TouchableOpacity style={styles.selectionButton} onPress={clearSelection} disabled={processing}>
-              <X size={18} color={COLORS.text} />
-              <Text style={styles.selectionButtonText}>Cancelar</Text>
+            <TouchableOpacity style={styles.headerButton} onPress={clearSelection} disabled={processing}>
+              <X size={20} color={COLORS.text} />
             </TouchableOpacity>
           </View>
         </View>
@@ -624,6 +597,79 @@ export default function PrivateScreen() {
         onMoveToAlbum={(albumId) => handleRestoreSelected(albumId)}
         onCreateAlbum={handleCreateAlbumAndRestore}
       />
+
+      {/* Action Menu Modal */}
+      <Modal
+        visible={showActionMenu}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setShowActionMenu(false)}
+      >
+        <TouchableOpacity style={styles.modalOverlay} activeOpacity={1} onPress={() => setShowActionMenu(false)}>
+          <View style={[styles.modalContent, { paddingBottom: 40 }]}>
+            <Text style={styles.modalTitle}>Acciones ({selectedIds.length} items)</Text>
+            
+            <View style={{ gap: SPACING.md, marginTop: SPACING.md }}>
+              {activeTab !== 'trash' ? (
+                <TouchableOpacity 
+                  style={[styles.selectionButton, { paddingVertical: 12, justifyContent: 'flex-start' }]} 
+                  onPress={() => { setShowActionMenu(false); handleShareSelected(); }} 
+                  disabled={processing}
+                >
+                  <Share2 size={20} color={COLORS.text} />
+                  <Text style={[styles.selectionButtonText, { fontSize: 16 }]}>Compartir</Text>
+                </TouchableOpacity>
+              ) : null}
+              {activeTab === 'active' ? (
+                <TouchableOpacity 
+                  style={[styles.selectionButton, { paddingVertical: 12, justifyContent: 'flex-start' }]} 
+                  onPress={() => { setShowActionMenu(false); handleArchiveSelected(); }} 
+                  disabled={processing}
+                >
+                  <Archive size={20} color={COLORS.text} />
+                  <Text style={[styles.selectionButtonText, { fontSize: 16 }]}>Archivar</Text>
+                </TouchableOpacity>
+              ) : null}
+              {activeTab !== 'trash' ? (
+                <TouchableOpacity 
+                  style={[styles.selectionButton, { paddingVertical: 12, justifyContent: 'flex-start' }]} 
+                  onPress={() => { setShowActionMenu(false); setShowAlbumModal(true); }} 
+                  disabled={processing}
+                >
+                  <FolderInput size={20} color={COLORS.text} />
+                  <Text style={[styles.selectionButtonText, { fontSize: 16 }]}>Album</Text>
+                </TouchableOpacity>
+              ) : null}
+              {activeTab === 'archived' ? (
+                <TouchableOpacity 
+                  style={[styles.selectionButton, { paddingVertical: 12, justifyContent: 'flex-start' }]} 
+                  onPress={() => { setShowActionMenu(false); handleRestoreArchivedSelected(); }} 
+                  disabled={processing}
+                >
+                  <RotateCcw size={20} color={COLORS.text} />
+                  <Text style={[styles.selectionButtonText, { fontSize: 16 }]}>Desarchivar</Text>
+                </TouchableOpacity>
+              ) : null}
+              <TouchableOpacity 
+                style={[styles.selectionButton, { paddingVertical: 12, justifyContent: 'flex-start' }]} 
+                onPress={() => { setShowActionMenu(false); handleRestoreSelected(); }} 
+                disabled={processing}
+              >
+                <RotateCcw size={20} color={COLORS.text} />
+                <Text style={[styles.selectionButtonText, { fontSize: 16 }]}>{activeTab === 'trash' ? 'Restaurar' : 'Sacar'}</Text>
+              </TouchableOpacity>
+              <TouchableOpacity 
+                style={[styles.selectionButton, styles.selectionDelete, { paddingVertical: 12, justifyContent: 'flex-start' }]} 
+                onPress={() => { setShowActionMenu(false); handleDeleteSelected(); }} 
+                disabled={processing}
+              >
+                <Trash2 size={20} color={COLORS.text} />
+                <Text style={[styles.selectionButtonText, { fontSize: 16 }]}>{activeTab === 'trash' ? 'Eliminar' : 'Papelera'}</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </TouchableOpacity>
+      </Modal>
 
       {/* Change PIN Modal */}
       <Modal
