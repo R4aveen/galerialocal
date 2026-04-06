@@ -15,6 +15,7 @@ import { setGallerySession } from '../../store/gallerySession';
 import { useSelectionStore } from '../../store/useSelectionStore';
 import PhotoGrid from '../../components/PhotoGrid';
 import AlbumManagerModal from '../../components/AlbumManagerModal';
+import { usePhotoSelectionHandlers } from '../../hooks/usePhotoSelectionHandlers';
 
 export default function PrivateScreen() {
   const router = useRouter();
@@ -26,9 +27,7 @@ export default function PrivateScreen() {
   const selectionMode = useSelectionStore(state => state.selectionMode);
   const selectedIdsSet = useSelectionStore(state => state.selectedIds);
   const selectedIds = Array.from(selectedIdsSet);
-  const toggleSelectionStore = useSelectionStore(state => state.toggleSelection);
   const clearSelectionStore = useSelectionStore(state => state.clearSelection);
-  const setSelectionModeStore = useSelectionStore(state => state.setSelectionMode);
 
   const [processing, setProcessing] = useState(false);
   const [processingCurrent, setProcessingCurrent] = useState(0);
@@ -156,10 +155,6 @@ export default function PrivateScreen() {
     setProcessingTotal(0);
   };
 
-  const toggleSelection = (assetId: string) => {
-    toggleSelectionStore(assetId);
-  };
-
   const handleShareSelected = async () => {
     if (selectedPrivateItems.length === 0) return;
 
@@ -277,33 +272,22 @@ export default function PrivateScreen() {
     }
   };
 
-  const handlePhotoPress = (asset: MediaLibrary.Asset) => {
-    if (selectionMode) {
-      toggleSelection(asset.id);
-      return;
-    }
-
-    const assetIndex = privateAssets.findIndex((item) => item.id === asset.id);
-    setGallerySession(privateAssets);
-    router.push({
-      pathname: `/photo/${asset.id}`,
-      params: {
-        uri: asset.uri,
-        filename: asset.filename,
-        index: String(assetIndex < 0 ? 0 : assetIndex),
-        source: 'private',
-      },
-    });
-  };
-
-  const handlePhotoLongPress = (asset: MediaLibrary.Asset) => {
-    if (!selectionMode) {
-      setSelectionModeStore(true);
-      toggleSelection(asset.id);
-      return;
-    }
-    toggleSelection(asset.id);
-  };
+  const { onPhotoPress: handlePhotoPressUnified, onPhotoLongPress: handlePhotoLongPressUnified } = usePhotoSelectionHandlers({
+    assets: privateAssets,
+    onOpenAsset: (asset, allAssets) => {
+      const assetIndex = allAssets.findIndex((item) => item.id === asset.id);
+      setGallerySession(allAssets);
+      router.push({
+        pathname: `/photo/${asset.id}`,
+        params: {
+          uri: (asset as any).uri,
+          filename: (asset as any).filename,
+          index: String(assetIndex < 0 ? 0 : assetIndex),
+          source: 'private',
+        },
+      });
+    },
+  });
 
   const handleCreateAlbumAndRestore = async (albumName: string) => {
     if (selectedPrivateItems.length === 0 || processing) return;
@@ -498,8 +482,8 @@ export default function PrivateScreen() {
         photos={privateAssets}
         loading={false}
         onLoadMore={() => undefined}
-        onPhotoPress={handlePhotoPress}
-        onPhotoLongPress={handlePhotoLongPress}
+        onPhotoPress={handlePhotoPressUnified}
+        onPhotoLongPress={handlePhotoLongPressUnified}
       />
 
       <AlbumManagerModal

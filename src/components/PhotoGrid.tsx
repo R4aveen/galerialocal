@@ -6,9 +6,12 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Dimensions, StyleSheet, View, ActivityIndicator, Text } from 'react-native';
 import { FlashList, type FlashListRef } from '@shopify/flash-list';
 import * as MediaLibrary from 'expo-media-library';
+import { Gesture, GestureDetector } from 'react-native-gesture-handler';
+import { runOnJS } from 'react-native-reanimated';
 import PhotoThumbnail from './PhotoThumbnail';
 import { COLORS } from '../constants/theme';
 import { getSafeAssetTimestamp } from '../utils/mediaDate';
+import { useSelectionStore } from '../store/useSelectionStore';
 
 const COLUMNS = 3;
 const SCREEN_WIDTH = Dimensions.get('window').width;
@@ -53,12 +56,75 @@ function PhotoGrid({
   const [activeMonthKey, setActiveMonthKey] = useState<string | null>(null);
   const [activeYear, setActiveYear] = useState('');
 
+  const selectionMode = useSelectionStore((state) => state.selectionMode);
+  const dragSelecting = useSelectionStore((state) => state.dragSelecting);
+  const setDragSelecting = useSelectionStore((state) => state.setDragSelecting);
+
+  const scrollOffsetRef = useRef(0);
+  const lastDragSelectedIdRef = useRef<string | null>(null);
+
   const skeletonRows = useMemo<GridSkeletonRow[]>(() => {
     if (!loading) return [];
     return Array.from({ length: 6 }).map((_, idx) => ({ key: `skeleton-${idx}`, type: 'skeleton' as const }));
   }, [loading]);
 
-    const gridModel = useMemo(() => buildGridModel(photos, COLUMNS, ROW_HEIGHT), [photos]);
+  const gridModel = useMemo(() => buildGridModel(photos, COLUMNS, ROW_HEIGHT), [photos]);
+
+  const hitTestAssetId = useCallback(
+    (locationX: number, locationY: number, listRows: GridRow[]) => {
+      if (locationX < 0 || locationY < 0) return null;
+      const contentY = scrollOffsetRef.current + locationY;
+      const contentX = locationX;
+
+      // Binary search row index by offset (offsetByIndex is monotonic).
+      let lo = 0;
+      let hi = listRows.length - 1;
+      let idx = -1;
+
+      while (lo <= hi) {
+        const mid = (lo + hi) >> 1;
+        const offset = gridModel.offsetByIndex.get(mid) ?? 0;
+        if (offset <= contentY) {
+          idx = mid;
+          lo = mid + 1;
+        } else {
+          hi = mid - 1;
+        }
+      }
+
+      if (idx < 0 || idx >= listRows.length) return null;
+      const row = listRows[idx];
+      if (row.type !== 'row') return null;
+
+      const rowOffset = gridModel.offsetByIndex.get(idx) ?? 0;
+      const withinRowY = contentY - rowOffset;
+      if (withinRowY < 0 || withinRowY > ROW_HEIGHT) return null;
+
+      const col = Math.max(0, Math.min(COLUMNS - 1, Math.floor(contentX / ITEM_SIZE)));
+      const asset = (row as any).assets?.[col] as MediaLibrary.Asset | undefined;
+      return asset?.id ?? null;
+    },
+    [gridModel.offsetByIndex]
+  );
+
+  const handleDragMove = useCallback(
+    (event: any, listRows: GridRow[]) => {
+      if (!selectionMode || !dragSelecting) return;
+      const id = hitTestAssetId(event.nativeEvent.locationX, event.nativeEvent.locationY, listRows);
+      if (!id) return;
+      if (lastDragSelectedIdRef.current === id) return;
+
+      lastDragSelectedIdRef.current = id;
+      useSelectionStore.getState().select(id);
+    },
+    [dragSelecting, hitTestAssetId, selectionMode]
+  );
+
+  const endDragSelecting = useCallback(() => {
+    if (!dragSelecting) return;
+    setDragSelecting(false);
+    lastDragSelectedIdRef.current = null;
+  }, [dragSelecting, setDragSelecting]);
 
   const scheduleOverlayHide = useCallback(() => {
     if (hideOverlayTimerRef.current) {
@@ -193,6 +259,11 @@ function PhotoGrid({
     return skeletonRows.length > 0 ? [...gridModel.rows, ...skeletonRows] : gridModel.rows;
   }, [gridModel.rows, skeletonRows]);
 
+  const listRowsRef = useRef<GridRow[]>(listRows);
+  useEffect(() => {
+    listRowsRef.current = listRows;
+  }, [listRows]);
+
   const onViewableItemsChanged = useCallback(({ viewableItems }: { viewableItems: Array<{ index: number | null }> }) => {
     let minVisibleIndex: number | null = null;
     viewableItems.forEach((item) => {
@@ -215,157 +286,207 @@ function PhotoGrid({
     }
   }, [gridModel.labelByIndex, gridModel.monthKeyByIndex]);
 
+  const beginDragSelectingAt = useCallback(
+    (x: number, y: number) => {
+      const rows = listRowsRef.current;
+      const id = hitTestAssetId(x, y, rows);
+      if (!id) return;
+
+      const state = useSelectionStore.getState();
+      if (!state.selectionMode) {
+        state.setSelectionMode(true);
+      }
+      state.beginDragSelect(id);
+      lastDragSelectedIdRef.current = id;
+    },
+    [hitTestAssetId]
+  );
+
+  const updateDragSelectingAt = useCallback(
+    (x: number, y: number) => {
+      const rows = listRowsRef.current;
+      const id = hitTestAssetId(x, y, rows);
+      if (!id) return;
+      if (lastDragSelectedIdRef.current === id) return;
+      lastDragSelectedIdRef.current = id;
+      useSelectionStore.getState().applyDragSelect(id);
+    },
+    [hitTestAssetId]
+  );
+
+  const panSelectGesture = useMemo(() => {
+    return Gesture.Pan()
+      .activateAfterLongPress(180)
+      .onBegin((event) => {
+        runOnJS(beginDragSelectingAt)(event.x, event.y);
+      })
+      .onUpdate((event) => {
+        runOnJS(updateDragSelectingAt)(event.x, event.y);
+      })
+      .onFinalize(() => {
+        runOnJS(() => {
+          useSelectionStore.getState().endDragSelect();
+        })();
+      });
+  }, [beginDragSelectingAt, endDragSelecting, updateDragSelectingAt]);
+
   return (
-    <View style={styles.container}>
-      <FlashList<GridRow>
-        ref={listRef}
-        // Mantener una key estable evita desmontar/remontar toda la lista
-        // cada vez que cambia la cantidad de fotos cargadas.
-        key={listKey || 'default'}
-        // initialScrollIndex={0} // Removido para evitar que el FlashList fuerce el índice 0 durante la paginación
-        data={listRows}
-        estimatedItemSize={ROW_HEIGHT}
-        estimatedListSize={{ width: SCREEN_WIDTH, height: Dimensions.get('window').height }}
-        overrideItemLayout={(layout, item) => {
-          const nextLayout = layout as any;
-          if (item.type === 'header') {
-            nextLayout.size = HEADER_HEIGHT;
-            return;
-          }
-          if (item.type === 'skeleton') {
+    <GestureDetector gesture={panSelectGesture}>
+      <View style={styles.container}>
+        <FlashList<GridRow>
+          ref={listRef}
+          // Mantener una key estable evita desmontar/remontar toda la lista
+          // cada vez que cambia la cantidad de fotos cargadas.
+          key={listKey || 'default'}
+          // initialScrollIndex={0} // Removido para evitar que el FlashList fuerce el índice 0 durante la paginación
+          data={listRows}
+          estimatedItemSize={ROW_HEIGHT}
+          estimatedListSize={{ width: SCREEN_WIDTH, height: Dimensions.get('window').height }}
+          overrideItemLayout={(layout, item) => {
+            const nextLayout = layout as any;
+            if (item.type === 'header') {
+              nextLayout.size = HEADER_HEIGHT;
+              return;
+            }
+            if (item.type === 'skeleton') {
+              nextLayout.size = ROW_HEIGHT;
+              return;
+            }
             nextLayout.size = ROW_HEIGHT;
-            return;
-          }
-          nextLayout.size = ROW_HEIGHT;
-        }}
-        getItemType={(item) => item.type}
-        drawDistance={SCREEN_WIDTH * 2}
-        initialNumToRender={36}
-        maxToRenderPerBatch={24}
-        renderItem={({ item }) => {
-          if (item.type === 'header') {
-            return <MonthHeader label={item.label} />;
-          }
+          }}
+          getItemType={(item) => item.type}
+          drawDistance={SCREEN_WIDTH * 2}
+          initialNumToRender={36}
+          maxToRenderPerBatch={24}
+          renderItem={({ item }) => {
+            if (item.type === 'header') {
+              return <MonthHeader label={item.label} />;
+            }
 
-          if (item.type === 'skeleton') {
+            if (item.type === 'skeleton') {
+              return (
+                <View style={[styles.row, { height: ITEM_SIZE }]}>
+                  {Array.from({ length: COLUMNS }).map((_, idx) => (
+                    <View key={`skeleton-cell-${item.key}-${idx}`} style={[styles.cell, styles.skeletonCell]} />
+                  ))}
+                </View>
+              );
+            }
+
             return (
-              <View style={[styles.row, { height: ITEM_SIZE }]}>
-                {Array.from({ length: COLUMNS }).map((_, idx) => (
-                  <View key={`skeleton-cell-${item.key}-${idx}`} style={[styles.cell, styles.skeletonCell]} />
-                ))}
-              </View>
+              <AssetRow
+                itemKey={item.key}
+                assets={item.assets}
+                columns={COLUMNS}
+                itemSize={ITEM_SIZE}
+                onPhotoPress={onPhotoPress}
+                onPhotoLongPress={onPhotoLongPress}
+              />
             );
-          }
-
-          return (
-            <AssetRow
-              itemKey={item.key}
-              assets={item.assets}
-              columns={COLUMNS}
-              itemSize={ITEM_SIZE}
-              onPhotoPress={onPhotoPress}
-              onPhotoLongPress={onPhotoLongPress}
-            />
-          );
-        }}
-        keyExtractor={(item) => item.key}
-        onEndReached={onLoadMore}
-        onEndReachedThreshold={4}
-        removeClippedSubviews={false}
-        scrollEventThrottle={16}
-        updateCellsBatchingPeriod={30}
-        onViewableItemsChanged={onViewableItemsChanged}
-        onScrollBeginDrag={() => beginTimelineInteraction(false)}
-        onMomentumScrollBegin={() => beginTimelineInteraction(false)}
-        onScrollEndDrag={() => {
-          setIsScrubbing(false);
-          scheduleOverlayHide();
-        }}
-        onMomentumScrollEnd={() => {
-          setIsScrubbing(false);
-          scheduleOverlayHide();
-        }}
-        ListFooterComponent={() => (
-          loading ? (
-            <View style={styles.footer}>
-              <ActivityIndicator color={COLORS.primary} />
-            </View>
-          ) : null
-        )}
-        {...({} as any)}
-      />
-
-      {showDateOverlay && overlayLabel ? (
-        <View style={styles.dateOverlay} pointerEvents="none">
-          <Text style={styles.dateOverlayText}>{overlayLabel}</Text>
-        </View>
-      ) : null}
-
-      {gridModel.yearAnchors.length > 1 ? (
-        <View
-          style={styles.edgeGrabZone}
-          onLayout={(event) => setRailHeight(event.nativeEvent.layout.height)}
-          onStartShouldSetResponder={() => false}
-          onMoveShouldSetResponder={(event) => event.nativeEvent.locationX > 16}
-          onResponderGrant={(event) => {
-            scrubStartYRef.current = event.nativeEvent.locationY;
-            scrubActiveRef.current = false;
-            beginTimelineInteraction(true);
           }}
-          onResponderMove={(event) => {
-            const deltaY = Math.abs(event.nativeEvent.locationY - scrubStartYRef.current);
-            if (!scrubActiveRef.current) {
-              if (deltaY < 8) return;
-              scrubActiveRef.current = true;
-            }
-            scrubYearByLocation(event.nativeEvent.locationY);
+          keyExtractor={(item) => item.key}
+          onEndReached={onLoadMore}
+          onEndReachedThreshold={4}
+          removeClippedSubviews={false}
+          scrollEventThrottle={16}
+          onScroll={(event) => {
+            scrollOffsetRef.current = event.nativeEvent.contentOffset.y;
           }}
-          onResponderRelease={(event) => {
-            const wasScrubbing = scrubActiveRef.current;
-            scrubActiveRef.current = false;
+          updateCellsBatchingPeriod={30}
+          onViewableItemsChanged={onViewableItemsChanged}
+          onScrollBeginDrag={() => beginTimelineInteraction(false)}
+          onMomentumScrollBegin={() => beginTimelineInteraction(false)}
+          onScrollEndDrag={() => {
             setIsScrubbing(false);
-            if (wasScrubbing) {
-              const finalAnchor = yearAnchorFromLocation(event.nativeEvent.locationY);
-              if (finalAnchor && finalAnchor.monthKey !== activeMonthRef.current) {
-                jumpToMonth(finalAnchor.monthKey, false);
-              }
-            }
             scheduleOverlayHide();
           }}
-        >
-          {railVisible ? (
-            <View style={styles.timelineRail}>
-              <View style={styles.timelineTrack}>
-                {gridModel.yearAnchors.map((yearAnchor, idx) => {
-                  const topPercent = gridModel.yearAnchors.length > 1
-                    ? (idx / (gridModel.yearAnchors.length - 1)) * 100
-                    : 0;
-                  return <View key={`dot-${yearAnchor.year}-${idx}`} style={[styles.timelineDot, { top: `${topPercent}%` }]} />;
-                })}
-                {activeMonthIndex >= 0 ? (
-                  <View
-                    style={[
-                      styles.timelineHandle,
-                      {
-                        top: `${gridModel.monthAnchors.length > 1
-                          ? (activeMonthIndex / (gridModel.monthAnchors.length - 1)) * 100
-                          : 0}%`,
-                      },
-                    ]}
-                  />
+          onMomentumScrollEnd={() => {
+            setIsScrubbing(false);
+            scheduleOverlayHide();
+          }}
+          ListFooterComponent={() => (
+            loading ? (
+              <View style={styles.footer}>
+                <ActivityIndicator color={COLORS.primary} />
+              </View>
+            ) : null
+          )}
+          {...({} as any)}
+        />
+
+        {showDateOverlay && overlayLabel ? (
+          <View style={styles.dateOverlay} pointerEvents="none">
+            <Text style={styles.dateOverlayText}>{overlayLabel}</Text>
+          </View>
+        ) : null}
+
+        {gridModel.yearAnchors.length > 1 ? (
+          <View
+            style={styles.edgeGrabZone}
+            onLayout={(event) => setRailHeight(event.nativeEvent.layout.height)}
+            onStartShouldSetResponder={() => false}
+            onMoveShouldSetResponder={(event) => event.nativeEvent.locationX > 16}
+            onResponderGrant={(event) => {
+              scrubStartYRef.current = event.nativeEvent.locationY;
+              scrubActiveRef.current = false;
+              beginTimelineInteraction(true);
+            }}
+            onResponderMove={(event) => {
+              const deltaY = Math.abs(event.nativeEvent.locationY - scrubStartYRef.current);
+              if (!scrubActiveRef.current) {
+                if (deltaY < 8) return;
+                scrubActiveRef.current = true;
+              }
+              scrubYearByLocation(event.nativeEvent.locationY);
+            }}
+            onResponderRelease={(event) => {
+              const wasScrubbing = scrubActiveRef.current;
+              scrubActiveRef.current = false;
+              setIsScrubbing(false);
+              if (wasScrubbing) {
+                const finalAnchor = yearAnchorFromLocation(event.nativeEvent.locationY);
+                if (finalAnchor && finalAnchor.monthKey !== activeMonthRef.current) {
+                  jumpToMonth(finalAnchor.monthKey, false);
+                }
+              }
+              scheduleOverlayHide();
+            }}
+          >
+            {railVisible ? (
+              <View style={styles.timelineRail}>
+                <View style={styles.timelineTrack}>
+                  {gridModel.yearAnchors.map((yearAnchor, idx) => {
+                    const topPercent = gridModel.yearAnchors.length > 1
+                      ? (idx / (gridModel.yearAnchors.length - 1)) * 100
+                      : 0;
+                    return <View key={`dot-${yearAnchor.year}-${idx}`} style={[styles.timelineDot, { top: `${topPercent}%` }]} />;
+                  })}
+                  {activeMonthIndex >= 0 ? (
+                    <View
+                      style={[
+                        styles.timelineHandle,
+                        {
+                          top: `${gridModel.monthAnchors.length > 1
+                            ? (activeMonthIndex / (gridModel.monthAnchors.length - 1)) * 100
+                            : 0}%`,
+                        },
+                      ]}
+                    />
+                  ) : null}
+                </View>
+                {activeYear ? (
+                  <View style={styles.activeYearBadge}>
+                    <Text style={styles.activeYearText}>{activeYear}</Text>
+                  </View>
                 ) : null}
               </View>
-              {activeYear ? (
-                <View style={styles.activeYearBadge}>
-                  <Text style={styles.activeYearText}>{activeYear}</Text>
-                </View>
-              ) : null}
-            </View>
-          ) : null}
-        </View>
-      ) : null}
-    </View>
+            ) : null}
+          </View>
+        ) : null}
+      </View>
+    </GestureDetector>
   );
+
 }
 
 export default React.memo(PhotoGrid);

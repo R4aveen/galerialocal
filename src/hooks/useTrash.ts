@@ -19,9 +19,25 @@ interface MoveManyResult {
 
 type ProgressCallback = (processed: number, total: number) => void;
 
+type TrashListener = (items: TrashItem[], loading: boolean) => void;
+
+let sharedTrashItems: TrashItem[] = [];
+let sharedTrashLoading = false;
+const trashListeners = new Set<TrashListener>();
+
+const notifyTrashListeners = () => {
+  trashListeners.forEach((listener) => {
+    try {
+      listener(sharedTrashItems, sharedTrashLoading);
+    } catch {
+      // ignore
+    }
+  });
+};
+
 export function useTrash() {
-  const [trashItems, setTrashItems] = useState<TrashItem[]>([]);
-  const [loading, setLoading] = useState(false);
+  const [trashItems, setTrashItems] = useState<TrashItem[]>(sharedTrashItems);
+  const [loading, setLoading] = useState(sharedTrashLoading);
 
   const baseDir = FileSystem.documentDirectory || FileSystem.cacheDirectory;
   const trashDir = `${baseDir}.trash/`;
@@ -68,21 +84,36 @@ export function useTrash() {
   );
 
   const loadTrash = useCallback(async () => {
+    sharedTrashLoading = true;
     setLoading(true);
+    notifyTrashListeners();
     try {
       const items = await readTrashItems();
       items.sort((a, b) => b.deleted_at - a.deleted_at);
+      sharedTrashItems = items;
       setTrashItems(items);
     } catch (error) {
       console.error('Error loading trash:', error);
+      sharedTrashItems = [];
       setTrashItems([]);
     } finally {
+      sharedTrashLoading = false;
       setLoading(false);
+      notifyTrashListeners();
     }
   }, [readTrashItems]);
 
   useEffect(() => {
+    const listener: TrashListener = (items, isLoading) => {
+      setTrashItems(items);
+      setLoading(isLoading);
+    };
+    trashListeners.add(listener);
+
     loadTrash();
+    return () => {
+      trashListeners.delete(listener);
+    };
   }, [loadTrash]);
 
   const buildTrashItem = useCallback(
@@ -157,6 +188,10 @@ export function useTrash() {
         const nextItems = Array.from(itemsById.values()).sort((a, b) => b.deleted_at - a.deleted_at);
         await writeTrashItems(nextItems);
 
+        // Optimistic: update shared state immediately so drawer/trash UI updates instantly.
+        sharedTrashItems = nextItems;
+        notifyTrashListeners();
+
         const builtIds = builtItems.map((item) => item.id);
         let bulkDeleted = false;
 
@@ -211,8 +246,12 @@ export function useTrash() {
       await MediaLibrary.createAssetAsync(item.uri);
 
       const items = await readTrashItems();
-      await writeTrashItems(items.filter((trashItem) => trashItem.id !== item.id));
+      const nextItems = items.filter((trashItem) => trashItem.id !== item.id);
+      await writeTrashItems(nextItems);
       await FileSystem.deleteAsync(item.uri, { idempotent: true });
+
+      sharedTrashItems = nextItems;
+      notifyTrashListeners();
 
       await loadTrash();
       return true;
@@ -229,17 +268,57 @@ export function useTrash() {
       await MediaLibrary.deleteAssetsAsync([item.id]);
 
       const items = await readTrashItems();
-      await writeTrashItems(items.filter((trashItem) => trashItem.id !== item.id));
+      const nextItems = items.filter((trashItem) => trashItem.id !== item.id);
+      await writeTrashItems(nextItems);
 
       if (item.uri) {
         await FileSystem.deleteAsync(item.uri, { idempotent: true });
       }
+
+      sharedTrashItems = nextItems;
+      notifyTrashListeners();
 
       await loadTrash();
       return true;
     } catch (error) {
       console.error('Error deleting permanently:', error);
       return false;
+    }
+  };
+
+  const emptyTrash = async () => {
+    try {
+      setLoading(true);
+      const items = await readTrashItems();
+      
+      const ids = items.map(item => item.id);
+      if (ids.length > 0) {
+        try {
+          await MediaLibrary.deleteAssetsAsync(ids);
+        } catch (error) {
+          console.warn('Could not cleanly delete all assets from media library during emptyTrash', error);
+        }
+      }
+
+      for (const item of items) {
+        if (item.uri) {
+          try {
+            await FileSystem.deleteAsync(item.uri, { idempotent: true });
+          } catch (e) {}
+        }
+      }
+
+      await writeTrashItems([]);
+
+      sharedTrashItems = [];
+      notifyTrashListeners();
+      await loadTrash();
+      return true;
+    } catch (error) {
+      console.error('Error emptying trash:', error);
+      return false;
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -250,6 +329,7 @@ export function useTrash() {
     moveManyToTrash,
     restoreFromTrash,
     deletePermanently,
+    emptyTrash,
     refreshTrash: loadTrash,
     getTrashIds,
   };

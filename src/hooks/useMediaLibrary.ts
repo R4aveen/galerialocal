@@ -165,6 +165,14 @@ export function useMediaLibrary(isGranted: boolean, options: UseMediaLibraryOpti
   useEffect(() => {
     if (!isGranted) return;
 
+    // Escuchar eventos dinámicos del sistema (ej: cuando se restaura o elimina una foto externamente)
+    const subscription = MediaLibrary.addListener(() => {
+      // Limpiar caché forzosamente para que la vista recargue fresca
+      mediaQueryCache.clear();
+      queryVersionRef.current += 1;
+      loadAssets(undefined, true);
+    });
+
     const cached = readCacheEntry(cacheKey);
     const isFresh = cached ? Date.now() - cached.updatedAt <= CACHE_TTL_MS : false;
 
@@ -199,6 +207,10 @@ export function useMediaLibrary(isGranted: boolean, options: UseMediaLibraryOpti
     if (!cached || !isFresh) {
       loadAssets(undefined, true);
     }
+
+    return () => {
+      subscription.remove();
+    };
   }, [isGranted, cacheKey, options.dateFilter, options.sortOrder, loadAssets]);
 
   const filteredAssets = useMemo(() => {

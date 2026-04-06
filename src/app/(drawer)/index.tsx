@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState, useCallback, useRef } from 'react';
-import { Alert, AppState, Share, StyleSheet, View, Text, TouchableOpacity, ActivityIndicator, ScrollView, InteractionManager } from 'react-native';
+import { Alert, AppState, Share, StyleSheet, View, Text, TouchableOpacity, ActivityIndicator, ScrollView, InteractionManager, Linking } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
 import { usePermissions } from '../../hooks/usePermissions';
 import { DateFilter, MediaFilter, SortOrder, useMediaLibrary } from '../../hooks/useMediaLibrary';
@@ -13,9 +13,70 @@ import { CameraOff, FolderInput, Lock, Share2, Trash2, X } from 'lucide-react-na
 import { useRouter } from 'expo-router';
 import { setGallerySession } from '../../store/gallerySession';
 import { useSelectionStore } from '../../store/useSelectionStore';
+import { usePhotoSelectionHandlers } from '../../hooks/usePhotoSelectionHandlers';
 
 export default function AllPhotosScreen() {
-  const { isGranted, requestPermission, isUnsupportedExpoGo } = usePermissions();
+  const { isGranted, isLimited, requestPermission, isUnsupportedExpoGo, checkPermissions } = usePermissions();
+
+  if (isUnsupportedExpoGo) {
+    return (
+      <View style={styles.container}>
+        <View style={styles.center}>
+          <CameraOff size={64} color={COLORS.textMuted} />
+          <Text style={styles.title}>Limitacion de Expo Go</Text>
+          <Text style={styles.subtitle}>
+            En Android, Expo Go ya no da acceso completo a la galeria. Usa un Development Build para probar esta funcion.
+          </Text>
+        </View>
+      </View>
+    );
+  }
+
+  if (isLimited) {
+    return (
+      <View style={styles.container}>
+        <View style={styles.center}>
+          <CameraOff size={64} color={COLORS.textMuted} />
+          <Text style={styles.title}>Acceso limitado a fotos</Text>
+          <Text style={styles.subtitle}>
+            Android te dio acceso solo a fotos seleccionadas. Para ver TODAS las imagenes del dispositivo (incluyendo
+            WhatsApp), habilita "Permitir todas las fotos" en Ajustes.
+          </Text>
+          <TouchableOpacity
+            style={styles.button}
+            onPress={async () => {
+              await Linking.openSettings();
+              await checkPermissions();
+            }}
+          >
+            <Text style={styles.buttonText}>Abrir Ajustes</Text>
+          </TouchableOpacity>
+        </View>
+      </View>
+    );
+  }
+
+  if (isGranted === false || isGranted === null || isGranted === undefined) {
+    return (
+      <View style={styles.container}>
+        <View style={styles.center}>
+          <CameraOff size={64} color={COLORS.textMuted} />
+          <Text style={styles.title}>Sin acceso a fotos</Text>
+          <Text style={styles.subtitle}>
+            Necesitamos permiso para mostrar tus recuerdos locales.
+          </Text>
+          <TouchableOpacity style={styles.button} onPress={requestPermission}>
+            <Text style={styles.buttonText}>Conceder Permiso</Text>
+          </TouchableOpacity>
+        </View>
+      </View>
+    );
+  }
+
+  return <GalleryEngine isGranted={isGranted} requestPermission={requestPermission} />;
+}
+
+function GalleryEngine({ isGranted, requestPermission }: any) {
   const { getTrashIds, refreshTrash, moveManyToTrash } = useTrash();
   const { getPrivateIds, refreshPrivate, hideManyInPrivate } = usePrivateVault();
   const { albums, loading: loadingAlbums, refreshAlbums, moveAssetsToAlbum, createAlbumFromAssets } = useAlbumManager(Boolean(isGranted));
@@ -26,9 +87,7 @@ export default function AllPhotosScreen() {
   const selectionMode = useSelectionStore(state => state.selectionMode);
   const selectedIdsSet = useSelectionStore(state => state.selectedIds);
   const selectedIds = Array.from(selectedIdsSet);
-  const toggleSelectionStore = useSelectionStore(state => state.toggleSelection);
   const clearSelectionStore = useSelectionStore(state => state.clearSelection);
-  const setSelectionModeStore = useSelectionStore(state => state.setSelectionMode);
 
   const [bulkProcessing, setBulkProcessing] = useState(false);
   const [processingCurrent, setProcessingCurrent] = useState(0);
@@ -94,10 +153,6 @@ export default function AllPhotosScreen() {
     [assets, selectedIds]
   );
 
-  const toggleSelection = (assetId: string) => {
-    toggleSelectionStore(assetId);
-  };
-
   const clearSelection = () => {
     clearSelectionStore();
     setProcessingCurrent(0);
@@ -119,32 +174,21 @@ export default function AllPhotosScreen() {
     setSortOrder(value);
   };
 
-  const handlePhotoPress = (asset: (typeof assets)[number]) => {
-    if (selectionMode) {
-      toggleSelection(asset.id);
-      return;
-    }
-
-    const assetIndex = assets.findIndex((item) => item.id === asset.id);
-    setGallerySession(assets);
-    router.push({
-      pathname: `/photo/${asset.id}`,
-      params: {
-        uri: asset.uri,
-        filename: asset.filename,
-        index: String(assetIndex < 0 ? 0 : assetIndex),
-      },
-    });
-  };
-
-  const handlePhotoLongPress = (asset: (typeof assets)[number]) => {
-    if (!selectionMode) {
-      setSelectionModeStore(true);
-      toggleSelectionStore(asset.id);
-      return;
-    }
-    toggleSelection(asset.id);
-  };
+  const { onPhotoPress: handlePhotoPress, onPhotoLongPress: handlePhotoLongPress } = usePhotoSelectionHandlers({
+    assets,
+    onOpenAsset: (asset, allAssets) => {
+      const assetIndex = allAssets.findIndex((item) => item.id === asset.id);
+      setGallerySession(allAssets);
+      router.push({
+        pathname: `/photo/${asset.id}`,
+        params: {
+          uri: (asset as any).uri,
+          filename: (asset as any).filename,
+          index: String(assetIndex < 0 ? 0 : assetIndex),
+        },
+      });
+    },
+  });
 
   const handleShareSelected = async () => {
     if (selectedAssets.length === 0) return;
@@ -253,164 +297,162 @@ export default function AllPhotosScreen() {
   const handlePrivateSelected = async () => {
     if (selectedAssets.length === 0 || bulkProcessing) return;
 
-    try {
-      setBulkProcessing(true);
-      setProcessingTotal(selectedAssets.length);
-      const { hidden, failed, movedIds } = await hideManyInPrivate(selectedAssets, (processed, total) => {
-        setProcessingCurrent(processed);
-        setProcessingTotal(total);
-      });
-      if (movedIds.length > 0) {
-        setOptimisticExcludedIds((prev) => Array.from(new Set([...prev, ...movedIds])));
-      }
-      await refreshPrivate();
-      clearSelection();
+    const assetsToMove = [...selectedAssets];
+    const idsToMove = assetsToMove.map((asset) => asset.id);
+    if (idsToMove.length === 0) return;
 
-      if (failed > 0) {
-        Alert.alert('Resultado parcial', `${hidden} movidos a privados, ${failed} fallaron.`);
-      } else {
-        Alert.alert('Listo', `${hidden} elementos movidos a privados.`);
-      }
-    } finally {
-      setBulkProcessing(false);
-    }
+    // UX: remove instantly and continue in background.
+    setOptimisticExcludedIds((prev) => Array.from(new Set([...prev, ...idsToMove])));
+    clearSelection();
+
+    setTimeout(() => {
+      void (async () => {
+        try {
+          setBulkProcessing(true);
+          setProcessingCurrent(0);
+          setProcessingTotal(assetsToMove.length);
+          const { hidden, failed } = await hideManyInPrivate(assetsToMove, (processed, total) => {
+            setProcessingCurrent(processed);
+            setProcessingTotal(total);
+          });
+          await refreshPrivate();
+
+          // Keep it non-intrusive: only show alert if something failed.
+          if (failed > 0) {
+            Alert.alert('Resultado parcial', `${hidden} movidos a privados, ${failed} fallaron.`);
+          }
+        } finally {
+          setBulkProcessing(false);
+        }
+      })();
+    }, 0);
   };
-
-  if (isUnsupportedExpoGo) {
-    return (
-      <View style={styles.container}>
-        <View style={styles.center}>
-          <CameraOff size={64} color={COLORS.textMuted} />
-          <Text style={styles.title}>Limitacion de Expo Go</Text>
-          <Text style={styles.subtitle}>
-            En Android, Expo Go ya no da acceso completo a la galeria. Usa un Development Build para probar esta funcion.
-          </Text>
-        </View>
-      </View>
-    );
-  }
-
-  if (!isGranted) {
-    return (
-      <View style={styles.container}>
-        <View style={styles.center}>
-          <CameraOff size={64} color={COLORS.textMuted} />
-          <Text style={styles.title}>Sin acceso a fotos</Text>
-          <Text style={styles.subtitle}>
-            Necesitamos permiso para mostrar tus recuerdos locales.
-          </Text>
-          <TouchableOpacity style={styles.button} onPress={requestPermission}>
-            <Text style={styles.buttonText}>Conceder Permiso</Text>
-          </TouchableOpacity>
-        </View>
-      </View>
-    );
-  }
 
   return (
     <View style={styles.container}>
-      <View style={styles.filtersContainer}>
-        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.filtersRow}>
-          <FilterChip label="Todo" active={mediaFilter === 'all'} onPress={() => changeMediaFilter('all')} />
-          <FilterChip label="Fotos" active={mediaFilter === 'photo'} onPress={() => changeMediaFilter('photo')} />
-          <FilterChip label="Videos" active={mediaFilter === 'video'} onPress={() => changeMediaFilter('video')} />
-          <FilterChip label="Capturas" active={mediaFilter === 'screenshot'} onPress={() => changeMediaFilter('screenshot')} />
-        </ScrollView>
-        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.filtersRow}>
-          <FilterChip label="Todo el tiempo" active={dateFilter === 'all'} onPress={() => changeDateFilter('all')} />
-          <FilterChip label="Ultimo mes" active={dateFilter === 'month'} onPress={() => changeDateFilter('month')} />
-          <FilterChip label="Ultimo año" active={dateFilter === 'year'} onPress={() => changeDateFilter('year')} />
-          <FilterChip label="Recientes" active={sortOrder === 'newest'} onPress={() => changeSortOrder('newest')} />
-          <FilterChip label="Antiguas" active={sortOrder === 'oldest'} onPress={() => changeSortOrder('oldest')} />
-        </ScrollView>
-        <View style={styles.filtersInfoRow}>
-          <Text style={styles.filtersInfoText}>
-            {loading ? 'Actualizando...' : `${assets.length} elementos`} {hasActiveFilters ? 'filtrados' : 'totales'}
-          </Text>
-          {hasActiveFilters ? (
+      {selectionMode ? (
+        <View style={styles.selectionTopBar}>
+          <View style={styles.selectionTopBarLeft}>
+            <TouchableOpacity onPress={clearSelection} style={styles.selectionTopBarBtn}>
+              <X size={24} color={COLORS.text} />
+            </TouchableOpacity>
+            <Text style={styles.selectionTopBarTitle}>{selectedIds.length} seleccionadas</Text>
+          </View>
+          <TouchableOpacity style={styles.selectAllButton} onPress={() => {
+            if (selectedIds.length === assets.length) {
+              clearSelection();
+            } else {
+              useSelectionStore.getState().selectAll(assets.map(a => a.id));
+            }
+          }}>
+            <Text style={styles.selectAllText}>{selectedIds.length === assets.length ? 'Desmarcar' : 'Elegir todo'}</Text>
+          </TouchableOpacity>
+        </View>
+      ) : (
+        <View style={styles.filtersContainer}>
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.filtersRow}>
+            <FilterChip label="Todo" active={mediaFilter === 'all'} onPress={() => changeMediaFilter('all')} />
+            <FilterChip label="Fotos" active={mediaFilter === 'photo'} onPress={() => changeMediaFilter('photo')} />
+            <FilterChip label="Videos" active={mediaFilter === 'video'} onPress={() => changeMediaFilter('video')} />
+            <FilterChip label="Capturas" active={mediaFilter === 'screenshot'} onPress={() => changeMediaFilter('screenshot')} />
+          </ScrollView>
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.filtersRow}>
+            <FilterChip label="Todo el tiempo" active={dateFilter === 'all'} onPress={() => changeDateFilter('all')} />
+            <FilterChip label="Ultimo mes" active={dateFilter === 'month'} onPress={() => changeDateFilter('month')} />
+            <FilterChip label="Ultimo año" active={dateFilter === 'year'} onPress={() => changeDateFilter('year')} />
+            <FilterChip label="Recientes" active={sortOrder === 'newest'} onPress={() => changeSortOrder('newest')} />
+            <FilterChip label="Antiguas" active={sortOrder === 'oldest'} onPress={() => changeSortOrder('oldest')} />
+          </ScrollView>
+          <View style={styles.filtersInfoRow}>
+            <Text style={styles.filtersInfoText}>
+              {loading ? 'Actualizando...' : `${assets.length} elementos`} {hasActiveFilters ? 'filtrados' : 'totales'}
+            </Text>
+            {hasActiveFilters ? (
+              <TouchableOpacity
+                onPress={() => {
+                  changeMediaFilter('all');
+                  changeDateFilter('all');
+                  changeSortOrder('newest');
+                }}
+                style={styles.resetFiltersButton}
+              >
+                <Text style={styles.resetFiltersButtonText}>Limpiar filtros</Text>
+              </TouchableOpacity>
+            ) : null}
+          </View>
+        </View>
+      )}
+
+      {selectionMode ? (
+        <View style={styles.selectionBar}>
+          {bulkProcessing ? (
+            <View style={styles.processingContainer}>
+              <ActivityIndicator size="small" color={COLORS.primary} style={{ marginRight: 8 }} />
+              <Text style={styles.processingText}>Procesando {processingCurrent} de {processingTotal}</Text>
+              <View style={styles.progressBarBackground}>
+                <View style={[styles.progressBarFill, { width: `${(processingCurrent / processingTotal) * 100}%` }]} />
+              </View>
+            </View>
+          ) : (
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.selectionActions}>
+              <TouchableOpacity
+                style={styles.selectionButton}
+                onPress={() => setShowAlbumModal(true)}
+              >
+                <FolderInput size={20} color={COLORS.text} />
+                <Text style={styles.selectionButtonText}>Album</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={styles.selectionButton}
+                onPress={handlePrivateSelected}
+              >
+                <Lock size={20} color={COLORS.text} />
+                <Text style={styles.selectionButtonText}>Privar</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={styles.selectionButton} onPress={handleShareSelected}>
+                <Share2 size={20} color={COLORS.text} />
+                <Text style={styles.selectionButtonText}>Compartir</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.selectionButton, styles.selectionDelete]}
+                onPress={handleDeleteSelected}
+              >
+                <Trash2 size={20} color="#ff4444" />
+                <Text style={[styles.selectionButtonText, { color: '#ff4444' }]}>Borrar</Text>
+              </TouchableOpacity>
+            </ScrollView>
+          )}
+        </View>
+      ) : null}
+
+      <View style={[styles.gridContainer, bulkProcessing && styles.dimmedOverlay]}>
+        {!loading && assets.length === 0 ? (
+          <View style={styles.emptyState}>
+            <Text style={styles.emptyTitle}>No hay resultados para este filtro</Text>
+            <Text style={styles.emptySubtitle}>Prueba con otro tipo de medio o rango de fechas.</Text>
             <TouchableOpacity
+              style={styles.emptyButton}
               onPress={() => {
                 changeMediaFilter('all');
                 changeDateFilter('all');
                 changeSortOrder('newest');
               }}
-              style={styles.resetFiltersButton}
             >
-              <Text style={styles.resetFiltersButtonText}>Limpiar filtros</Text>
+              <Text style={styles.emptyButtonText}>Restablecer filtros</Text>
             </TouchableOpacity>
-          ) : null}
-        </View>
+          </View>
+        ) : (
+          <PhotoGrid
+            listKey="gallery"
+            resetScrollToken={galleryResetToken}
+            photos={assets}
+            loading={loading}
+            onLoadMore={loadMore}
+            onPhotoPress={handlePhotoPress}
+            onPhotoLongPress={handlePhotoLongPress}
+          />
+        )}
       </View>
-
-      {selectionMode ? (
-        <View style={styles.selectionBar}>
-          <Text style={styles.selectionCount}>{selectedIds.length} seleccionadas</Text>
-          {bulkProcessing ? (
-            <Text style={styles.processingText}>Procesando {processingCurrent}/{processingTotal}</Text>
-          ) : null}
-          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.selectionActions}>
-            <TouchableOpacity
-              style={styles.selectionButton}
-              onPress={() => setShowAlbumModal(true)}
-              disabled={bulkProcessing}
-            >
-              <FolderInput size={18} color={COLORS.text} />
-              <Text style={styles.selectionButtonText}>Album</Text>
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={styles.selectionButton}
-              onPress={handlePrivateSelected}
-              disabled={bulkProcessing}
-            >
-              <Lock size={18} color={COLORS.text} />
-              <Text style={styles.selectionButtonText}>{bulkProcessing ? 'Procesando...' : 'Privar'}</Text>
-            </TouchableOpacity>
-            <TouchableOpacity style={styles.selectionButton} onPress={handleShareSelected}>
-              <Share2 size={18} color={COLORS.text} />
-              <Text style={styles.selectionButtonText}>Compartir</Text>
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={[styles.selectionButton, styles.selectionDelete, bulkProcessing && styles.selectionButtonDisabled]}
-              onPress={handleDeleteSelected}
-              disabled={bulkProcessing}
-            >
-              <Trash2 size={18} color={COLORS.text} />
-              <Text style={styles.selectionButtonText}>{bulkProcessing ? 'Procesando...' : 'Borrar'}</Text>
-            </TouchableOpacity>
-            <TouchableOpacity style={styles.selectionButton} onPress={clearSelection}>
-              <X size={18} color={COLORS.text} />
-              <Text style={styles.selectionButtonText}>Cancelar</Text>
-            </TouchableOpacity>
-          </ScrollView>
-        </View>
-      ) : null}
-
-      {!loading && assets.length === 0 ? (
-        <View style={styles.emptyState}>
-          <Text style={styles.emptyTitle}>No hay resultados para este filtro</Text>
-          <Text style={styles.emptySubtitle}>Prueba con otro tipo de medio o rango de fechas.</Text>
-          <TouchableOpacity
-            style={styles.emptyButton}
-            onPress={() => {
-              changeMediaFilter('all');
-              changeDateFilter('all');
-              changeSortOrder('newest');
-            }}
-          >
-            <Text style={styles.emptyButtonText}>Restablecer filtros</Text>
-          </TouchableOpacity>
-        </View>
-      ) : (
-        <PhotoGrid
-          listKey={`${mediaFilter}-${dateFilter}-${sortOrder}-${galleryResetToken}`}
-          resetScrollToken={galleryResetToken}
-          photos={assets}
-          onLoadMore={loadMore}
-          loading={loading}
-          onPhotoPress={handlePhotoPress}
-          onPhotoLongPress={handlePhotoLongPress}
-        />
-      )}
 
       <AlbumManagerModal
         visible={showAlbumModal}
@@ -443,6 +485,62 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: COLORS.background,
+  },
+  gridContainer: {
+    flex: 1,
+  },
+  dimmedOverlay: {
+    opacity: 0.5,
+  },
+  selectionTopBar: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingHorizontal: SPACING.lg,
+    paddingVertical: SPACING.md,
+    backgroundColor: COLORS.surface,
+    borderBottomWidth: 1,
+    borderBottomColor: COLORS.border,
+  },
+  selectionTopBarLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  selectionTopBarBtn: {
+    marginRight: SPACING.md,
+  },
+  selectionTopBarTitle: {
+    fontSize: 18,
+    fontWeight: 'bold',
+    color: COLORS.text,
+  },
+  selectAllButton: {
+    paddingHorizontal: SPACING.md,
+    paddingVertical: SPACING.sm,
+  },
+  selectAllText: {
+    fontSize: 16,
+    color: COLORS.primary,
+    fontWeight: '600',
+  },
+  processingContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: SPACING.md,
+    width: '100%',
+  },
+  progressBarBackground: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    height: 3,
+    backgroundColor: COLORS.border,
+  },
+  progressBarFill: {
+    height: 3,
+    backgroundColor: COLORS.primary,
   },
   center: {
     flex: 1,

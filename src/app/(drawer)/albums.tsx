@@ -1,5 +1,5 @@
 import React from 'react';
-import { StyleSheet, View, Text, FlatList, ActivityIndicator } from 'react-native';
+import { StyleSheet, View, Text, FlatList, ActivityIndicator, TouchableOpacity, Linking } from 'react-native';
 import { COLORS, SPACING } from '../../constants/theme';
 import { useAlbums, AlbumWithCover } from '../../hooks/useAlbums';
 import { usePermissions } from '../../hooks/usePermissions';
@@ -7,7 +7,7 @@ import AlbumCard from '../../components/AlbumCard';
 import { useRouter } from 'expo-router';
 
 export default function AlbumsScreen() {
-  const { isGranted, isUnsupportedExpoGo } = usePermissions();
+  const { isGranted, isLimited, isUnsupportedExpoGo, checkPermissions } = usePermissions();
   const { albums, loading } = useAlbums(isGranted);
   const router = useRouter();
 
@@ -18,6 +18,27 @@ export default function AlbumsScreen() {
         <Text style={styles.subtitle}>
           Expo Go no permite acceso completo a la galeria en Android. Para ver albumes, usa un Development Build.
         </Text>
+      </View>
+    );
+  }
+
+  if (isLimited) {
+    return (
+      <View style={styles.center}>
+        <Text style={styles.title}>Acceso limitado a fotos</Text>
+        <Text style={styles.subtitle}>
+          Android te dio acceso solo a fotos seleccionadas. Para ver TODOS los albumes y archivos (incluyendo WhatsApp),
+          habilita "Permitir todas las fotos" en Ajustes.
+        </Text>
+        <TouchableOpacity
+          style={styles.button}
+          onPress={async () => {
+            await Linking.openSettings();
+            await checkPermissions();
+          }}
+        >
+          <Text style={styles.buttonText}>Abrir Ajustes</Text>
+        </TouchableOpacity>
       </View>
     );
   }
@@ -86,6 +107,17 @@ const styles = StyleSheet.create({
     color: COLORS.textMuted,
     textAlign: 'center',
     fontSize: 14,
+  },
+  button: {
+    marginTop: SPACING.lg,
+    backgroundColor: COLORS.primary,
+    paddingHorizontal: SPACING.lg,
+    paddingVertical: SPACING.md,
+    borderRadius: 10,
+  },
+  buttonText: {
+    color: COLORS.background,
+    fontWeight: '700',
   },
   list: {
     padding: SPACING.md,

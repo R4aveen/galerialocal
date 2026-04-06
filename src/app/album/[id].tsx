@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { ActivityIndicator, Alert, Share, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { ActivityIndicator, Alert, Share, StyleSheet, Text, TouchableOpacity, View, Linking } from 'react-native';
 import * as MediaLibrary from 'expo-media-library';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { ArrowLeft, CameraOff, FolderInput, Lock, Share2, Trash2, X } from 'lucide-react-native';
@@ -14,6 +14,7 @@ import { usePrivateVault } from '../../hooks/usePrivateVault';
 import { useAlbumManager } from '../../hooks/useAlbumManager';
 import { setGallerySession } from '../../store/gallerySession';
 import { useSelectionStore } from '../../store/useSelectionStore';
+import { usePhotoSelectionHandlers } from '../../hooks/usePhotoSelectionHandlers';
 
 const PAGE_SIZE = 50;
 
@@ -22,7 +23,7 @@ export default function AlbumDetailScreen() {
   const albumId = params.id;
   const albumTitle = params.title || 'Album';
   const router = useRouter();
-  const { isGranted, requestPermission, isUnsupportedExpoGo } = usePermissions();
+  const { isGranted, isLimited, requestPermission, isUnsupportedExpoGo, checkPermissions } = usePermissions();
   const { getTrashIds, refreshTrash, moveManyToTrash } = useTrash();
   const { getPrivateIds, refreshPrivate, hideManyInPrivate } = usePrivateVault();
   const { albums, loading: loadingAlbums, refreshAlbums, moveAssetsToAlbum, createAlbumFromAssets } = useAlbumManager(Boolean(isGranted));
@@ -34,9 +35,7 @@ export default function AlbumDetailScreen() {
   const selectionMode = useSelectionStore(state => state.selectionMode);
   const selectedIdsSet = useSelectionStore(state => state.selectedIds);
   const selectedIds = Array.from(selectedIdsSet);
-  const toggleSelectionStore = useSelectionStore(state => state.toggleSelection);
   const clearSelectionStore = useSelectionStore(state => state.clearSelection);
-  const setSelectionModeStore = useSelectionStore(state => state.setSelectionMode);
   const [bulkProcessing, setBulkProcessing] = useState(false);
   const [processingCurrent, setProcessingCurrent] = useState(0);
   const [processingTotal, setProcessingTotal] = useState(0);
@@ -50,6 +49,40 @@ export default function AlbumDetailScreen() {
       refreshAlbums();
     }, [refreshTrash, refreshPrivate, refreshAlbums])
   );
+
+  if (isUnsupportedExpoGo) {
+    return (
+      <View style={styles.center}>
+        <CameraOff size={64} color={COLORS.textMuted} />
+        <Text style={styles.title}>Limitacion de Expo Go</Text>
+        <Text style={styles.subtitle}>
+          En Android, Expo Go ya no da acceso completo a la galeria. Usa un Development Build para probar esta funcion.
+        </Text>
+      </View>
+    );
+  }
+
+  if (isLimited) {
+    return (
+      <View style={styles.center}>
+        <CameraOff size={64} color={COLORS.textMuted} />
+        <Text style={styles.title}>Acceso limitado a fotos</Text>
+        <Text style={styles.subtitle}>
+          Android te dio acceso solo a fotos seleccionadas. Para ver TODO el contenido del dispositivo (incluyendo WhatsApp),
+          habilita "Permitir todas las fotos" en Ajustes.
+        </Text>
+        <TouchableOpacity
+          style={styles.button}
+          onPress={async () => {
+            await Linking.openSettings();
+            await checkPermissions();
+          }}
+        >
+          <Text style={styles.buttonText}>Abrir Ajustes</Text>
+        </TouchableOpacity>
+      </View>
+    );
+  }
 
   const loadAssets = useCallback(
     async (after?: string) => {
@@ -101,15 +134,27 @@ export default function AlbumDetailScreen() {
     [filteredAssets, selectedIds]
   );
 
-  const toggleSelection = (assetId: string) => {
-    toggleSelectionStore(assetId);
-  };
-
   const clearSelection = () => {
     clearSelectionStore();
     setProcessingCurrent(0);
     setProcessingTotal(0);
   };
+
+  const { onPhotoPress: handlePhotoPress, onPhotoLongPress: handlePhotoLongPress } = usePhotoSelectionHandlers({
+    assets: filteredAssets,
+    onOpenAsset: (asset, allAssets) => {
+      const assetIndex = allAssets.findIndex((item) => item.id === asset.id);
+      setGallerySession(allAssets);
+      router.push({
+        pathname: `/photo/${asset.id}`,
+        params: {
+          uri: (asset as any).uri,
+          filename: (asset as any).filename,
+          index: String(assetIndex < 0 ? 0 : assetIndex),
+        },
+      });
+    },
+  });
 
   const handleShareSelected = async () => {
     if (selectedAssets.length === 0) return;
@@ -221,26 +266,36 @@ export default function AlbumDetailScreen() {
   const handlePrivateSelected = async () => {
     if (selectedAssets.length === 0 || bulkProcessing) return;
 
-    try {
-      setBulkProcessing(true);
-      setProcessingTotal(selectedAssets.length);
-      const { failed, movedIds } = await hideManyInPrivate(selectedAssets, (processed, total) => {
-        setProcessingCurrent(processed);
-        setProcessingTotal(total);
-      });
-      if (movedIds.length > 0) {
-        setOptimisticHiddenIds((prev) => Array.from(new Set([...prev, ...movedIds])));
-      }
-      await refreshPrivate();
-      clearSelection();
-      await loadAssets(undefined);
+    const assetsToMove = [...selectedAssets];
+    const idsToMove = assetsToMove.map((asset) => asset.id);
+    if (idsToMove.length === 0) return;
 
-      if (failed > 0) {
-        Alert.alert('Atencion', `${failed} elementos no se pudieron mover a privados.`);
-      }
-    } finally {
-      setBulkProcessing(false);
-    }
+    // UX: hide instantly and continue in background.
+    setOptimisticHiddenIds((prev) => Array.from(new Set([...prev, ...idsToMove])));
+    clearSelection();
+
+    setTimeout(() => {
+      void (async () => {
+        try {
+          setBulkProcessing(true);
+          setProcessingCurrent(0);
+          setProcessingTotal(assetsToMove.length);
+          const { hidden, failed } = await hideManyInPrivate(assetsToMove, (processed, total) => {
+            setProcessingCurrent(processed);
+            setProcessingTotal(total);
+          });
+
+          await refreshPrivate();
+          await loadAssets(undefined);
+
+          if (failed > 0) {
+            Alert.alert('Resultado parcial', `${hidden} movidos a privados, ${failed} fallaron.`);
+          }
+        } finally {
+          setBulkProcessing(false);
+        }
+      })();
+    }, 0);
   };
 
   if (isUnsupportedExpoGo) {
@@ -336,31 +391,8 @@ export default function AlbumDetailScreen() {
         photos={filteredAssets}
         loading={loading}
         onLoadMore={handleLoadMore}
-        onPhotoPress={(asset) => {
-          if (selectionMode) {
-            toggleSelection(asset.id);
-            return;
-          }
-
-          const assetIndex = filteredAssets.findIndex((item) => item.id === asset.id);
-          setGallerySession(filteredAssets);
-          router.push({
-            pathname: `/photo/${asset.id}`,
-            params: {
-              uri: asset.uri,
-              filename: asset.filename,
-              index: String(assetIndex < 0 ? 0 : assetIndex),
-            },
-          });
-        }}
-        onPhotoLongPress={(asset) => {
-          if (!selectionMode) {
-            setSelectionModeStore(true);
-            toggleSelection(asset.id);
-            return;
-          }
-          toggleSelection(asset.id);
-        }}
+        onPhotoPress={handlePhotoPress}
+        onPhotoLongPress={handlePhotoLongPress}
       />
 
       <AlbumManagerModal

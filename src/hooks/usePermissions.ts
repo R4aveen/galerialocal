@@ -6,6 +6,14 @@ export function usePermissions() {
     useState<MediaLibrary.PermissionResponse | null>(null);
   const [permissionError, setPermissionError] = useState<string | null>(null);
 
+  const accessPrivileges = (permissionResponse as any)?.accessPrivileges as
+    | 'all'
+    | 'limited'
+    | 'none'
+    | undefined;
+  const isLimited = accessPrivileges === 'limited';
+  const isFullAccess = accessPrivileges === 'all' || accessPrivileges === undefined;
+
   const checkPermissions = async () => {
     try {
       const response = await MediaLibrary.getPermissionsAsync(false, ['photo', 'video']);
@@ -41,6 +49,8 @@ export function usePermissions() {
 
   return {
     isGranted: permissionResponse?.status === 'granted',
+    isLimited,
+    isFullAccess: permissionResponse?.status === 'granted' && isFullAccess,
     canAskAgain: permissionResponse?.canAskAgain,
     permissionError,
     isUnsupportedExpoGo,

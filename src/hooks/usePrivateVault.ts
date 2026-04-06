@@ -214,9 +214,8 @@ export function usePrivateVault() {
       await ensureVault();
       const index = await readIndex();
 
-      let hidden = 0;
       let failed = 0;
-      const movedIds: string[] = [];
+      const copied: Array<{ assetId: string; dest: string; entry: PrivateItem }> = [];
 
       for (const asset of assets) {
         try {
@@ -231,7 +230,7 @@ export function usePrivateVault() {
           }
           if (!source) {
             failed += 1;
-            onProgress?.(hidden + failed, assets.length);
+            onProgress?.(copied.length + failed, assets.length);
             continue;
           }
 
@@ -240,43 +239,51 @@ export function usePrivateVault() {
           const dest = `${VAULT_DIR}${localId}${fileExt(name) || '.bin'}`;
 
           await FileSystem.copyAsync({ from: source, to: dest });
-
-          let deleted = false;
-          try {
-            deleted = await MediaLibrary.deleteAssetsAsync([asset.id]);
-          } catch {
-            deleted = false;
-          }
-
-          if (!deleted) {
-            await FileSystem.deleteAsync(dest, { idempotent: true });
-            failed += 1;
-            onProgress?.(hidden + failed, assets.length);
-            continue;
-          }
-
-          index.push({
-            id: localId,
-            filename: name,
-            uri: dest,
-            originalPath: source,
-            hiddenAt: toMs(asset.creationTime || Date.now()),
+          copied.push({
+            assetId: asset.id,
+            dest,
+            entry: {
+              id: localId,
+              filename: name,
+              uri: dest,
+              originalPath: source,
+              hiddenAt: toMs(asset.creationTime || Date.now()),
+            },
           });
-
-          hidden += 1;
-          movedIds.push(asset.id);
-          onProgress?.(hidden + failed, assets.length);
+          onProgress?.(copied.length + failed, assets.length);
         } catch (error) {
-          console.error('Error hiding asset in secure vault:', asset.id, error);
+          console.error('Error copying asset into secure vault:', asset.id, error);
           failed += 1;
-          onProgress?.(hidden + failed, assets.length);
+          onProgress?.(copied.length + failed, assets.length);
         }
+      }
+
+      const copiedIds = copied.map((c) => c.assetId);
+      let bulkDeleted = false;
+      if (copiedIds.length > 0) {
+        try {
+          bulkDeleted = await MediaLibrary.deleteAssetsAsync(copiedIds);
+        } catch {
+          bulkDeleted = false;
+        }
+      }
+
+      if (!bulkDeleted) {
+        // If Android rejects bulk delete or user denies, roll back copied files.
+        for (const item of copied) {
+          await FileSystem.deleteAsync(item.dest, { idempotent: true });
+        }
+        return { hidden: 0, failed: assets.length, movedIds: [] };
+      }
+
+      for (const item of copied) {
+        index.push(item.entry);
       }
 
       index.sort((a, b) => b.hiddenAt - a.hiddenAt);
       await writeIndex(index);
       await refreshPrivate();
-      return { hidden, failed, movedIds };
+      return { hidden: copied.length, failed, movedIds: copiedIds };
     },
     [ensureVault, readIndex, refreshPrivate, writeIndex]
   );
