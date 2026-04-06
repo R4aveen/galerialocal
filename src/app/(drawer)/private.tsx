@@ -4,7 +4,7 @@ import * as MediaLibrary from 'expo-media-library';
 import * as FileSystem from 'expo-file-system/legacy';
 import { useRouter } from 'expo-router';
 import { useFocusEffect } from '@react-navigation/native';
-import { Archive, FolderInput, Lock, RotateCcw, Share2, Trash2, X, Settings, MoreVertical } from 'lucide-react-native';
+import { Archive, FolderInput, Lock, RotateCcw, Share2, Trash2, X, Settings, MoreVertical, ChevronLeft } from 'lucide-react-native';
 import { COLORS, SPACING } from '../../constants/theme';
 import { usePrivateVault } from '../../hooks/usePrivateVault';
 import { useAlbumManager } from '../../hooks/useAlbumManager';
@@ -417,6 +417,51 @@ export default function PrivateScreen() {
     }
   };
 
+  const [isRefreshing, setIsRefreshing] = useState(false);
+
+  const handleRefresh = async () => {
+    if (activeTab === 'active') {
+      setIsRefreshing(true);
+      setActiveTab('archived');
+      // Adding a small delay just for effect
+      setTimeout(() => setIsRefreshing(false), 500);
+    }
+  };
+
+  const renderHeader = () => (
+    <View style={styles.header}>
+      <View style={{ flexDirection: 'row', alignItems: 'center', gap: SPACING.sm }}>
+        {activeTab !== 'active' && (
+          <TouchableOpacity
+            style={styles.headerButton}
+            onPress={() => setActiveTab('active')}
+          >
+            <ChevronLeft size={24} color={COLORS.text} />
+          </TouchableOpacity>
+        )}
+        <Text style={styles.headerTitle}>
+          {activeTab === 'trash' ? 'Papelera' : activeTab === 'archived' ? 'Archivadas' : 'Privadas'}
+        </Text>
+      </View>
+      <View style={{ flexDirection: 'row', alignItems: 'center', gap: SPACING.md }}>
+        {activeTab === 'active' && (
+          <TouchableOpacity
+            style={styles.headerButton}
+            onPress={() => setActiveTab('trash')}
+          >
+            <Trash2 size={20} color={COLORS.text} />
+          </TouchableOpacity>
+        )}
+        <TouchableOpacity
+          style={styles.headerButton}
+          onPress={() => setShowChangePinModal(true)}
+        >
+          <Settings size={20} color={COLORS.text} />
+        </TouchableOpacity>
+      </View>
+    </View>
+  );
+
   if (!hasPin) {
     return (
       <View style={styles.center}>
@@ -493,26 +538,7 @@ export default function PrivateScreen() {
   if (visiblePrivateItems.length === 0) {
     return (
       <View style={styles.container}>
-        <View style={styles.header}>
-          <Text style={styles.headerTitle}>Privadas</Text>
-          <TouchableOpacity
-            style={styles.headerButton}
-            onPress={() => setShowChangePinModal(true)}
-          >
-            <Settings size={20} color={COLORS.text} />
-          </TouchableOpacity>
-        </View>
-        <View style={styles.tabsRow}>
-          <TouchableOpacity style={[styles.tabButton, activeTab === 'active' && styles.tabButtonActive]} onPress={() => setActiveTab('active')}>
-            <Text style={[styles.tabButtonText, activeTab === 'active' && styles.tabButtonTextActive]}>Privadas</Text>
-          </TouchableOpacity>
-          <TouchableOpacity style={[styles.tabButton, activeTab === 'archived' && styles.tabButtonActive]} onPress={() => setActiveTab('archived')}>
-            <Text style={[styles.tabButtonText, activeTab === 'archived' && styles.tabButtonTextActive]}>Archivadas</Text>
-          </TouchableOpacity>
-          <TouchableOpacity style={[styles.tabButton, activeTab === 'trash' && styles.tabButtonActive]} onPress={() => setActiveTab('trash')}>
-            <Text style={[styles.tabButtonText, activeTab === 'trash' && styles.tabButtonTextActive]}>Papelera</Text>
-          </TouchableOpacity>
-        </View>
+        {renderHeader()}
         <View style={styles.center}>
           <Lock size={52} color={COLORS.textMuted} />
           <Text style={styles.title}>
@@ -533,33 +559,13 @@ export default function PrivateScreen() {
   return (
     <View style={styles.container}>
       {/* Header with change PIN button */}
-      <View style={styles.header}>
-        <Text style={styles.headerTitle}>Privadas</Text>
-        <TouchableOpacity
-          style={styles.headerButton}
-          onPress={() => setShowChangePinModal(true)}
-        >
-          <Settings size={20} color={COLORS.text} />
-        </TouchableOpacity>
-      </View>
+      {renderHeader()}
 
       {autoCapturedCount > 0 ? (
         <View style={styles.autoCaptureBanner}>
           <Text style={styles.autoCaptureText}>Capturas detectadas y protegidas: {autoCapturedCount}</Text>
         </View>
       ) : null}
-
-      <View style={styles.tabsRow}>
-        <TouchableOpacity style={[styles.tabButton, activeTab === 'active' && styles.tabButtonActive]} onPress={() => setActiveTab('active')}>
-          <Text style={[styles.tabButtonText, activeTab === 'active' && styles.tabButtonTextActive]}>Privadas ({privateItems.length})</Text>
-        </TouchableOpacity>
-        <TouchableOpacity style={[styles.tabButton, activeTab === 'archived' && styles.tabButtonActive]} onPress={() => setActiveTab('archived')}>
-          <Text style={[styles.tabButtonText, activeTab === 'archived' && styles.tabButtonTextActive]}>Archivadas ({archivedPrivateItems.length})</Text>
-        </TouchableOpacity>
-        <TouchableOpacity style={[styles.tabButton, activeTab === 'trash' && styles.tabButtonActive]} onPress={() => setActiveTab('trash')}>
-          <Text style={[styles.tabButtonText, activeTab === 'trash' && styles.tabButtonTextActive]}>Papelera ({trashedPrivateItems.length})</Text>
-        </TouchableOpacity>
-      </View>
 
       {selectionMode ? (
         <View style={[styles.selectionBar, { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }]}>
@@ -583,6 +589,8 @@ export default function PrivateScreen() {
       <PhotoGrid
         photos={privateAssets}
         loading={false}
+        refreshing={isRefreshing}
+        onRefresh={activeTab === 'active' ? handleRefresh : undefined}
         onLoadMore={() => undefined}
         onPhotoPress={handlePhotoPressUnified}
         onPhotoLongPress={handlePhotoLongPressUnified}

@@ -3,7 +3,7 @@ import MonthHeader from './PhotoGridComponents/MonthHeader';
 import AssetRow from './PhotoGridComponents/AssetRow';
 import { TimelineRail } from './PhotoGridComponents/TimelineRail';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Dimensions, StyleSheet, View, ActivityIndicator, Text } from 'react-native';
+import { Dimensions, StyleSheet, View, ActivityIndicator, Text, RefreshControl } from 'react-native';
 import { FlashList, type FlashListRef } from '@shopify/flash-list';
 import * as MediaLibrary from 'expo-media-library';
 import PhotoThumbnail from './PhotoThumbnail';
@@ -25,6 +25,8 @@ interface Props {
   onPhotoPress: (asset: MediaLibrary.Asset) => void;
   onPhotoLongPress?: (asset: MediaLibrary.Asset) => void;
   loading: boolean;
+  refreshing?: boolean;
+  onRefresh?: () => void;
 }
 
 function PhotoGrid({
@@ -35,6 +37,8 @@ function PhotoGrid({
   onPhotoPress,
   onPhotoLongPress,
   loading,
+  refreshing,
+  onRefresh,
 }: Props) {
   const listRef = useRef<FlashListRef<GridRow> | null>(null);
   const dragSelecting = useSelectionStore(state => state.dragSelecting);
@@ -437,6 +441,7 @@ function PhotoGrid({
       >
         <FlashList<GridRow>
           ref={listRef}
+          refreshControl={onRefresh ? <RefreshControl refreshing={refreshing || false} onRefresh={onRefresh} /> : undefined}
           // Mantener una key estable evita desmontar/remontar toda la lista
           // cada vez que cambia la cantidad de fotos cargadas.
           key={listKey || 'default'}
