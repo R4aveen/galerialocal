@@ -1,11 +1,14 @@
 import React, { useState, useCallback } from 'react';
 import { StyleSheet, View, Text, FlatList, TouchableOpacity, Alert, useWindowDimensions, Modal, SafeAreaView, ActivityIndicator } from 'react-native';
-import { COLORS, SPACING } from '../../constants/theme';
+import { SPACING } from '../../constants/theme';
 import { Trash2, Trash, RotateCcw, X, CheckSquare, Square, Info } from 'lucide-react-native';
 import { useTrash, TrashItem } from '../../hooks/useTrash';
 import { Image } from 'expo-image';
+import { ThemeColors, useAppTheme } from '../../theme/AppThemeContext';
 
 export default function TrashScreen() {
+  const { colors, mode } = useAppTheme();
+  const styles = React.useMemo(() => createStyles(colors, mode), [colors, mode]);
   const { trashItems, emptyTrash, restoreFromTrash, deletePermanently } = useTrash();
   const { width } = useWindowDimensions();
   const NUM_COLUMNS = 4;
@@ -126,7 +129,7 @@ export default function TrashScreen() {
           />
           {isSelected && (
             <View style={styles.checkOverlay}>
-              <CheckSquare size={20} color={COLORS.primary} fill="#fff" />
+              <CheckSquare size={20} color={colors.primary} fill="#fff" />
             </View>
           )}
           {selectionMode && !isSelected && (
@@ -148,7 +151,7 @@ export default function TrashScreen() {
     return (
       <View style={styles.container}>
         <View style={styles.center}>
-          <Trash2 size={48} color={COLORS.textMuted} />
+          <Trash2 size={48} color={colors.textMuted} />
           <Text style={styles.text}>La papelera está vacía</Text>
           <Text style={styles.subtext}>Las fotos borradas se guardan por 30 días</Text>
         </View>
@@ -163,16 +166,16 @@ export default function TrashScreen() {
         <View style={styles.selectionTopBar}>
           <View style={styles.selectionCount}>
             <TouchableOpacity onPress={() => setSelectedIds(new Set())} style={styles.iconBtn}>
-              <X size={24} color={COLORS.text} />
+              <X size={24} color={colors.text} />
             </TouchableOpacity>
             <Text style={styles.selectionText}>{selectedIds.size} seleccionados</Text>
           </View>
           <View style={styles.selectionActions}>
             <TouchableOpacity style={styles.iconBtn} onPress={handleRestoreSelected}>
-              <RotateCcw size={22} color={COLORS.primary} />
+              <RotateCcw size={22} color={colors.primary} />
             </TouchableOpacity>
             <TouchableOpacity style={[styles.iconBtn, { marginLeft: 16 }]} onPress={handleDeleteSelected}>
-              <Trash size={22} color={COLORS.error} />
+              <Trash size={22} color={colors.error} />
             </TouchableOpacity>
           </View>
         </View>
@@ -188,7 +191,7 @@ export default function TrashScreen() {
 
       {isProcessing && (
         <View style={styles.overlayProcessing}>
-          <ActivityIndicator size="large" color={COLORS.primary} />
+          <ActivityIndicator size="large" color={colors.primary} />
           <Text style={styles.processingText}>Procesando...</Text>
         </View>
       )}
@@ -252,7 +255,7 @@ export default function TrashScreen() {
                   </TouchableOpacity>
                   
                   <TouchableOpacity 
-                    style={[styles.modalActionBtn, { backgroundColor: COLORS.error }]} 
+                    style={[styles.modalActionBtn, { backgroundColor: colors.error }]} 
                     onPress={() => {
                       Alert.alert('Borrar permanentemente', 'Esta acción no se puede deshacer.', [
                         { text: 'Cancelar', style: 'cancel' },
@@ -279,10 +282,10 @@ export default function TrashScreen() {
   );
 }
 
-const styles = StyleSheet.create({
+const createStyles = (colors: ThemeColors, mode: 'dark' | 'light') => StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: COLORS.background,
+    backgroundColor: colors.background,
   },
   topBar: {
     flexDirection: 'row',
@@ -290,9 +293,9 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     paddingHorizontal: SPACING.md,
     paddingVertical: SPACING.sm,
-    backgroundColor: COLORS.surface,
+    backgroundColor: colors.surface,
     borderBottomWidth: 1,
-    borderBottomColor: COLORS.border,
+    borderBottomColor: colors.border,
   },
   selectionTopBar: {
     flexDirection: 'row',
@@ -300,9 +303,9 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     paddingHorizontal: SPACING.sm,
     paddingVertical: SPACING.sm,
-    backgroundColor: COLORS.surface,
+    backgroundColor: colors.surface,
     borderBottomWidth: 1,
-    borderBottomColor: COLORS.border,
+    borderBottomColor: colors.border,
     elevation: 2,
   },
   selectionCount: {
@@ -312,7 +315,7 @@ const styles = StyleSheet.create({
   selectionText: {
     fontSize: 18,
     fontWeight: '600',
-    color: COLORS.text,
+    color: colors.text,
     marginLeft: SPACING.sm,
   },
   selectionActions: {
@@ -324,14 +327,14 @@ const styles = StyleSheet.create({
     padding: SPACING.xs,
   },
   topBarText: {
-    color: COLORS.text,
+    color: colors.text,
     fontSize: 14,
     fontWeight: '500',
   },
   emptyButton: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: COLORS.error,
+    backgroundColor: colors.error,
     paddingHorizontal: SPACING.md,
     paddingVertical: 8,
     borderRadius: 8,
@@ -347,6 +350,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
     padding: SPACING.xl,
+    backgroundColor: colors.background,
   },
   list: {
     paddingBottom: SPACING.xl,
@@ -358,7 +362,7 @@ const styles = StyleSheet.create({
   thumbnail: {
     width: '100%',
     height: '100%',
-    backgroundColor: COLORS.border,
+    backgroundColor: colors.border,
   },
   thumbnailSelected: {
     transform: [{ scale: 0.85 }],
@@ -374,7 +378,7 @@ const styles = StyleSheet.create({
     position: 'absolute',
     bottom: 4,
     right: 4,
-    backgroundColor: COLORS.error,
+    backgroundColor: colors.error,
     width: 20,
     height: 20,
     borderRadius: 10,
@@ -387,13 +391,13 @@ const styles = StyleSheet.create({
     fontWeight: 'bold',
   },
   text: {
-    color: COLORS.text,
+    color: colors.text,
     marginTop: SPACING.md,
     fontSize: 18,
     fontWeight: '600',
   },
   subtext: {
-    color: COLORS.textMuted,
+    color: colors.textMuted,
     marginTop: SPACING.sm,
     fontSize: 14,
     textAlign: 'center',
@@ -401,7 +405,7 @@ const styles = StyleSheet.create({
   overlayProcessing: {
     position: 'absolute',
     top: 0, left: 0, right: 0, bottom: 0,
-    backgroundColor: 'rgba(0,0,0,0.5)',
+    backgroundColor: mode === 'light' ? 'rgba(60,44,29,0.28)' : 'rgba(0,0,0,0.5)',
     zIndex: 10,
     justifyContent: 'center',
     alignItems: 'center',
@@ -414,7 +418,7 @@ const styles = StyleSheet.create({
   },
   modalContainer: {
     flex: 1,
-    backgroundColor: '#000',
+    backgroundColor: mode === 'light' ? colors.surface : '#000000',
   },
   modalHeader: {
     flexDirection: 'row',
@@ -447,7 +451,7 @@ const styles = StyleSheet.create({
     fontSize: 14,
   },
   unrecoverableText: {
-    color: COLORS.error,
+    color: colors.error,
     textAlign: 'center',
     marginBottom: 16,
     fontWeight: 'bold',
@@ -459,7 +463,7 @@ const styles = StyleSheet.create({
   modalActionBtn: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: COLORS.surface,
+    backgroundColor: colors.surface,
     paddingVertical: 12,
     paddingHorizontal: 20,
     borderRadius: 8,

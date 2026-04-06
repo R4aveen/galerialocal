@@ -8,7 +8,7 @@ import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context'
 
 import PhotoGrid from '../../components/PhotoGrid';
 import AlbumManagerModal from '../../components/AlbumManagerModal';
-import { COLORS, SPACING } from '../../constants/theme';
+import { SPACING } from '../../constants/theme';
 import { usePermissions } from '../../hooks/usePermissions';
 import { useTrash } from '../../hooks/useTrash';
 import { usePrivateVault } from '../../hooks/usePrivateVault';
@@ -16,8 +16,9 @@ import { useAlbumManager } from '../../hooks/useAlbumManager';
 import { setGallerySession } from '../../store/gallerySession';
 import { useSelectionStore } from '../../store/useSelectionStore';
 import { usePhotoSelectionHandlers } from '../../hooks/usePhotoSelectionHandlers';
-import { dedupeAssetsById } from '../../utils/mediaAssets';
-import { prepareShareUri, sharePreparedUri } from '../../utils/shareMedia';
+import { dedupeAssetsById, getAssetIdentityKey } from '../../utils/mediaAssets';
+import { prepareShareUris, sharePreparedUris } from '../../utils/shareMedia';
+import { ThemeColors, useAppTheme } from '../../theme/AppThemeContext';
 
 const PAGE_SIZE = 50;
 
@@ -27,6 +28,8 @@ export default function AlbumDetailScreen() {
   const albumTitle = params.title || 'Album';
   const router = useRouter();
   const insets = useSafeAreaInsets();
+  const { colors, mode } = useAppTheme();
+  const styles = useMemo(() => createStyles(colors, mode), [colors, mode]);
   const { isGranted, isLimited, requestPermission, isUnsupportedExpoGo, checkPermissions, requestFullAccessAgain } = usePermissions();
   const { getTrashIds, refreshTrash, moveManyToTrash } = useTrash();
   const { getPrivateIds, refreshPrivate, hideManyInPrivate } = usePrivateVault();
@@ -57,7 +60,7 @@ export default function AlbumDetailScreen() {
   if (isUnsupportedExpoGo) {
     return (
       <View style={styles.center}>
-        <CameraOff size={64} color={COLORS.textMuted} />
+        <CameraOff size={64} color={colors.textMuted} />
         <Text style={styles.title}>Limitacion de Expo Go</Text>
         <Text style={styles.subtitle}>
           En Android, Expo Go ya no da acceso completo a la galeria. Usa un Development Build para probar esta funcion.
@@ -69,7 +72,7 @@ export default function AlbumDetailScreen() {
   if (isLimited) {
     return (
       <View style={styles.center}>
-        <CameraOff size={64} color={COLORS.textMuted} />
+        <CameraOff size={64} color={colors.textMuted} />
         <Text style={styles.title}>Acceso limitado a fotos</Text>
         <Text style={styles.subtitle}>
           Android te dio acceso solo a fotos seleccionadas. Para ver TODO el contenido del dispositivo (incluyendo WhatsApp),
@@ -142,7 +145,7 @@ export default function AlbumDetailScreen() {
 
   const filteredAssets = useMemo(() => {
     const excluded = new Set([...getTrashIds(), ...getPrivateIds(), ...optimisticHiddenIds]);
-    return assets.filter((asset) => !excluded.has(asset.id));
+    return assets.filter((asset) => !excluded.has(getAssetIdentityKey(asset)));
   }, [assets, getTrashIds, getPrivateIds, optimisticHiddenIds]);
 
   const selectedAssets = useMemo(
@@ -159,8 +162,9 @@ export default function AlbumDetailScreen() {
   const { onPhotoPress: handlePhotoPress, onPhotoLongPress: handlePhotoLongPress } = usePhotoSelectionHandlers({
     assets: filteredAssets,
     onOpenAsset: (asset, allAssets) => {
-      const assetIndex = allAssets.findIndex((item) => item.id === asset.id);
-      setGallerySession(allAssets);
+      const sameTypeAssets = allAssets.filter((item) => item.mediaType === asset.mediaType);
+      const assetIndex = sameTypeAssets.findIndex((item) => item.id === asset.id);
+      setGallerySession(sameTypeAssets);
       router.push({
         pathname: `/photo/${asset.id}`,
         params: {
@@ -176,17 +180,14 @@ export default function AlbumDetailScreen() {
     if (selectedAssets.length === 0) return;
     try {
       clearSelection();
-      if (selectedAssets.length > 1) {
-        Alert.alert('Compartir', 'Por ahora se comparte un archivo a la vez. Se abrira el primero seleccionado.');
-      }
-
-      const item = selectedAssets[0];
-      const shareUri = await prepareShareUri({
-        assetId: item.id,
-        fallbackUri: item.uri,
-        filename: item.filename,
-      });
-      await sharePreparedUri(shareUri, 'Compartir archivo');
+      const prepared = await prepareShareUris(
+        selectedAssets.map((item) => ({
+          assetId: item.id,
+          fallbackUri: item.uri,
+          filename: item.filename,
+        }))
+      );
+      await sharePreparedUris(prepared, selectedAssets.length > 1 ? 'Compartir archivos' : 'Compartir archivo');
     } catch (error) {
       console.error('Error sharing selected album assets:', error);
       Alert.alert('Error al compartir', 'No se pudo compartir el archivo seleccionado.');
@@ -214,7 +215,8 @@ export default function AlbumDetailScreen() {
                 setProcessingTotal(total);
               });
               if (movedIds.length > 0) {
-                setOptimisticHiddenIds((prev) => Array.from(new Set([...prev, ...movedIds])));
+                const movedKeys = selectedAssets.map((asset) => getAssetIdentityKey(asset));
+                setOptimisticHiddenIds((prev) => Array.from(new Set([...prev, ...movedKeys])));
               }
               await refreshTrash();
               clearSelection();
@@ -292,7 +294,7 @@ export default function AlbumDetailScreen() {
     if (selectedAssets.length === 0 || bulkProcessing) return;
 
     const assetsToMove = [...selectedAssets];
-    const idsToMove = assetsToMove.map((asset) => asset.id);
+    const idsToMove = assetsToMove.map((asset) => getAssetIdentityKey(asset));
     if (idsToMove.length === 0) return;
 
     // UX: hide instantly and continue in background.
@@ -326,7 +328,7 @@ export default function AlbumDetailScreen() {
   if (isUnsupportedExpoGo) {
     return (
       <View style={styles.center}>
-        <CameraOff size={64} color={COLORS.textMuted} />
+        <CameraOff size={64} color={colors.textMuted} />
         <Text style={styles.title}>Limitacion de Expo Go</Text>
         <Text style={styles.subtitle}>
           Para ver albumes en Android usa un Development Build.
@@ -338,7 +340,7 @@ export default function AlbumDetailScreen() {
   if (!isGranted) {
     return (
       <View style={styles.center}>
-        <CameraOff size={64} color={COLORS.textMuted} />
+        <CameraOff size={64} color={colors.textMuted} />
         <Text style={styles.title}>Sin acceso a fotos</Text>
         <Text style={styles.subtitle}>Necesitamos permisos para leer este album.</Text>
         <TouchableOpacity style={styles.button} onPress={requestPermission}>
@@ -351,7 +353,7 @@ export default function AlbumDetailScreen() {
   if (loading && filteredAssets.length === 0) {
     return (
       <View style={styles.center}>
-        <ActivityIndicator size="large" color={COLORS.primary} />
+        <ActivityIndicator size="large" color={colors.primary} />
         <Text style={styles.subtitle}>Cargando {albumTitle}...</Text>
       </View>
     );
@@ -370,7 +372,7 @@ export default function AlbumDetailScreen() {
     <SafeAreaView style={styles.container} edges={['top']}>
       <View style={[styles.header, { paddingTop: insets.top, height: 56 + insets.top }]}>
         <TouchableOpacity onPress={() => router.back()} style={styles.backButton}>
-          <ArrowLeft color={COLORS.text} size={20} />
+          <ArrowLeft color={colors.text} size={20} />
         </TouchableOpacity>
         <Text numberOfLines={1} style={styles.headerTitle}>{albumTitle}</Text>
         <View style={styles.backButton} />
@@ -384,15 +386,15 @@ export default function AlbumDetailScreen() {
           ) : null}
           <View style={styles.selectionActions}>
             <TouchableOpacity style={styles.selectionButton} onPress={() => setShowAlbumModal(true)}>
-              <FolderInput size={18} color={COLORS.text} />
+              <FolderInput size={18} color={colors.text} />
               <Text style={styles.selectionButtonText}>Album</Text>
             </TouchableOpacity>
             <TouchableOpacity style={styles.selectionButton} onPress={handlePrivateSelected} disabled={bulkProcessing}>
-              <Lock size={18} color={COLORS.text} />
+              <Lock size={18} color={colors.text} />
               <Text style={styles.selectionButtonText}>{bulkProcessing ? 'Procesando...' : 'Privar'}</Text>
             </TouchableOpacity>
             <TouchableOpacity style={styles.selectionButton} onPress={handleShareSelected}>
-              <Share2 size={18} color={COLORS.text} />
+              <Share2 size={18} color={colors.text} />
               <Text style={styles.selectionButtonText}>Compartir</Text>
             </TouchableOpacity>
             <TouchableOpacity
@@ -400,11 +402,11 @@ export default function AlbumDetailScreen() {
               onPress={handleDeleteSelected}
               disabled={bulkProcessing}
             >
-              <Trash2 size={18} color={COLORS.text} />
+              <Trash2 size={18} color={colors.text} />
               <Text style={styles.selectionButtonText}>{bulkProcessing ? 'Procesando...' : 'Borrar'}</Text>
             </TouchableOpacity>
             <TouchableOpacity style={styles.selectionButton} onPress={clearSelection}>
-              <X size={18} color={COLORS.text} />
+              <X size={18} color={colors.text} />
               <Text style={styles.selectionButtonText}>Cancelar</Text>
             </TouchableOpacity>
           </View>
@@ -433,10 +435,10 @@ export default function AlbumDetailScreen() {
   );
 }
 
-const styles = StyleSheet.create({
+const createStyles = (colors: ThemeColors, mode: 'dark' | 'light') => StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: COLORS.background,
+    backgroundColor: colors.background,
   },
   header: {
     height: 60,
@@ -445,7 +447,7 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     paddingHorizontal: SPACING.md,
     borderBottomWidth: 1,
-    borderBottomColor: COLORS.border,
+    borderBottomColor: colors.border,
   },
   backButton: {
     width: 40,
@@ -455,7 +457,7 @@ const styles = StyleSheet.create({
   },
   headerTitle: {
     flex: 1,
-    color: COLORS.text,
+    color: colors.text,
     fontSize: 16,
     fontWeight: '700',
     textAlign: 'center',
@@ -465,51 +467,51 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
     padding: SPACING.xl,
-    backgroundColor: COLORS.background,
+    backgroundColor: colors.background,
   },
   title: {
     fontSize: 22,
     fontWeight: '700',
-    color: COLORS.text,
+    color: colors.text,
     textAlign: 'center',
   },
   subtitle: {
     marginTop: SPACING.md,
-    color: COLORS.textMuted,
+    color: colors.textMuted,
     textAlign: 'center',
     fontSize: 14,
   },
   button: {
     marginTop: SPACING.lg,
-    backgroundColor: COLORS.primary,
+    backgroundColor: colors.primary,
     paddingHorizontal: SPACING.xl,
     paddingVertical: SPACING.md,
     borderRadius: 8,
   },
   buttonText: {
-    color: COLORS.background,
+    color: colors.background,
     fontWeight: '600',
     fontSize: 16,
   },
   secondaryButton: {
     marginTop: SPACING.sm,
-    backgroundColor: COLORS.border,
+    backgroundColor: colors.border,
   },
   selectionBar: {
     borderBottomWidth: 1,
-    borderBottomColor: COLORS.border,
+    borderBottomColor: colors.border,
     paddingHorizontal: SPACING.md,
     paddingVertical: SPACING.sm,
-    backgroundColor: COLORS.surface,
+    backgroundColor: colors.surface,
   },
   selectionCount: {
-    color: COLORS.text,
+    color: colors.text,
     fontSize: 14,
     fontWeight: '700',
     marginBottom: 8,
   },
   processingText: {
-    color: COLORS.textMuted,
+    color: colors.textMuted,
     fontSize: 12,
     marginBottom: 8,
   },
@@ -524,16 +526,16 @@ const styles = StyleSheet.create({
     paddingHorizontal: 10,
     paddingVertical: 8,
     borderRadius: 10,
-    backgroundColor: COLORS.border,
+    backgroundColor: colors.border,
   },
   selectionDelete: {
-    backgroundColor: COLORS.error,
+    backgroundColor: colors.error,
   },
   selectionButtonDisabled: {
     opacity: 0.65,
   },
   selectionButtonText: {
-    color: COLORS.text,
+    color: colors.text,
     fontSize: 12,
     fontWeight: '600',
   },

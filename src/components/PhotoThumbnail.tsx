@@ -3,6 +3,7 @@ import { StyleSheet, Pressable, View, Text } from 'react-native';
 import { Image } from 'expo-image';
 import * as MediaLibrary from 'expo-media-library';
 import { useSelectionStore } from '../store/useSelectionStore';
+import { getAssetIdentityKey } from '../utils/mediaAssets';
 
 interface Props {
   asset: MediaLibrary.Asset;
@@ -12,9 +13,10 @@ interface Props {
 }
 
 function PhotoThumbnail({ asset, size, onPress, onLongPress }: Props) {
+  const selectionKey = getAssetIdentityKey(asset);
   // Suscripción atómica: El componente SOLO se volverá a renderizar si 
   // su propio estado de selección cambia o si el modo selección se apaga/enciende globalmente.
-  const isSelected = useSelectionStore(state => state.selectedIds.has(asset.id));
+  const isSelected = useSelectionStore(state => state.selectedIds.has(selectionKey));
   const selectionMode = useSelectionStore(state => state.selectionMode);
   const dragSelecting = useSelectionStore(state => state.dragSelecting);
 
@@ -54,16 +56,27 @@ function PhotoThumbnail({ asset, size, onPress, onLongPress }: Props) {
 // React.memo evitará que este componente se re-renderice si el Asset o las callbacks onPress no cambian,
 // ignorando los cambios globales de otras fotos.
 export default memo(PhotoThumbnail, (prev, next) => {
-  return prev.asset.id === next.asset.id && prev.size === next.size;
+  return prev.asset.id === next.asset.id && prev.asset.uri === next.asset.uri && prev.size === next.size;
 });
 
 const styles = StyleSheet.create({
   container: {
-    padding: 1,
+    padding: 2,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.08)',
+    backgroundColor: 'rgba(255,255,255,0.02)',
+    shadowColor: '#000000',
+    shadowOpacity: 0.2,
+    shadowRadius: 3,
+    shadowOffset: { width: 0, height: 2 },
+    elevation: 2,
+    overflow: 'hidden',
   },
   image: {
     flex: 1,
     backgroundColor: '#1a1a1a',
+    borderRadius: 8,
   },
   pressed: {
     opacity: 0.7,
@@ -71,6 +84,9 @@ const styles = StyleSheet.create({
   selected: {
     borderWidth: 2,
     borderColor: '#BB86FC',
+    shadowOpacity: 0.45,
+    shadowRadius: 6,
+    elevation: 4,
   },
   videoBadge: {
     position: 'absolute',

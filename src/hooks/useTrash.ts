@@ -232,7 +232,12 @@ export function useTrash() {
   };
 
   const getTrashIds = useCallback(() => {
-    return trashItems.map((item) => item.id);
+    return trashItems.map((item) => {
+      if (item.original_path) {
+        return `${item.id}::${item.original_path}`;
+      }
+      return item.id;
+    });
   }, [trashItems]);
 
   const restoreFromTrash = async (item: TrashItem) => {

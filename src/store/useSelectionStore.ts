@@ -69,10 +69,16 @@ export const useSelectionStore = create<SelectionState>((set) => ({
       }
       return {
         selectedIds: next,
-        selectionMode: next.size > 0,
+        // Keep selection mode active while finger is dragging, even if temporary count hits 0.
+        selectionMode: true,
       };
     }),
-  endDragSelect: () => set({ dragSelecting: false, dragSelectMode: null }),
+  endDragSelect: () =>
+    set((state) => ({
+      dragSelecting: false,
+      dragSelectMode: null,
+      selectionMode: state.selectedIds.size > 0,
+    })),
   selectMultiple: (ids) =>
     set((state) => {
       const newSet = new Set(state.selectedIds);

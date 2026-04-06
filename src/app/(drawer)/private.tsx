@@ -1,11 +1,10 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { Alert, Share, StyleSheet, Text, TextInput, TouchableOpacity, View, Modal, AppState } from 'react-native';
+import { Alert, StyleSheet, Text, TextInput, TouchableOpacity, View, Modal, AppState } from 'react-native';
 import * as MediaLibrary from 'expo-media-library';
-import * as FileSystem from 'expo-file-system/legacy';
 import { useRouter } from 'expo-router';
 import { useFocusEffect } from '@react-navigation/native';
 import { Archive, FolderInput, Lock, RotateCcw, Share2, Trash2, X, Settings, MoreVertical, ChevronLeft } from 'lucide-react-native';
-import { COLORS, SPACING } from '../../constants/theme';
+import { SPACING } from '../../constants/theme';
 import { usePrivateVault } from '../../hooks/usePrivateVault';
 import { useAlbumManager } from '../../hooks/useAlbumManager';
 import { usePermissions } from '../../hooks/usePermissions';
@@ -16,11 +15,15 @@ import { useSelectionStore } from '../../store/useSelectionStore';
 import PhotoGrid from '../../components/PhotoGrid';
 import AlbumManagerModal from '../../components/AlbumManagerModal';
 import { usePhotoSelectionHandlers } from '../../hooks/usePhotoSelectionHandlers';
+import { prepareShareUris, sharePreparedUris } from '../../utils/shareMedia';
+import { ThemeColors, useAppTheme } from '../../theme/AppThemeContext';
 
 type PrivateTab = 'active' | 'archived' | 'trash';
 
 export default function PrivateScreen() {
   const router = useRouter();
+  const { colors, mode } = useAppTheme();
+  const styles = useMemo(() => createStyles(colors, mode), [colors, mode]);
   const { isGranted } = usePermissions();
   const {
     privateItems,
@@ -183,55 +186,13 @@ export default function PrivateScreen() {
       clearSelection();
       setProcessing(true);
 
-      if (selectedPrivateItems.length > 1) {
-        Alert.alert('Compartir', 'Por ahora se comparte un archivo a la vez. Se abrira el primero seleccionado.');
-      }
-
-      const item = selectedPrivateItems[0];
-
-      // Prefer a real file-backed URI (WhatsApp often fails with virtual/content URIs).
-      let shareUri: string | null = null;
-      try {
-        const assetInfo = await MediaLibrary.getAssetInfoAsync(item.id);
-        if (assetInfo?.localUri) {
-          shareUri = assetInfo.localUri;
-        }
-      } catch {
-        // Ignore; fallback to copying from stored URI below.
-      }
-
-      if (!shareUri) {
-        const sourceInfo = await FileSystem.getInfoAsync(item.uri);
-        if (!sourceInfo.exists) {
-          Alert.alert('Error', 'El archivo no existe o fue eliminado.');
-          return;
-        }
-
-        const filename = item.filename || (item.uri.split('/').pop() || 'private-file');
-        const hasExt = /\.[a-z0-9]{2,6}$/i.test(filename);
-        const safeName = hasExt ? filename : `${filename}.bin`;
-        const tempName = `${Date.now()}_${safeName}`;
-        const baseDir = FileSystem.cacheDirectory || FileSystem.documentDirectory;
-        const tempUri = `${baseDir}${tempName}`;
-        await FileSystem.copyAsync({ from: item.uri, to: tempUri });
-        shareUri = tempUri;
-      }
-
-      if (!shareUri) {
-        Alert.alert('Error', 'No se pudo preparar el archivo para compartir.');
-        return;
-      }
-
-      const sharedInfo = await FileSystem.getInfoAsync(shareUri);
-      if (!sharedInfo.exists || (typeof sharedInfo.size === 'number' && sharedInfo.size <= 0)) {
-        Alert.alert('Error', 'El archivo a compartir esta vacio o no se pudo leer.');
-        return;
-      }
-
-      await Share.share({
-        title: 'Compartir archivo privado',
-        url: shareUri,
-      });
+      const prepared = await prepareShareUris(
+        selectedPrivateItems.map((item) => ({
+          fallbackUri: item.uri,
+          filename: item.filename,
+        }))
+      );
+      await sharePreparedUris(prepared, selectedPrivateItems.length > 1 ? 'Compartir archivos privados' : 'Compartir archivo privado');
 
       clearSelection();
     } catch (error) {
@@ -347,8 +308,9 @@ export default function PrivateScreen() {
   const { onPhotoPress: handlePhotoPressUnified, onPhotoLongPress: handlePhotoLongPressUnified } = usePhotoSelectionHandlers({
     assets: privateAssets,
     onOpenAsset: (asset, allAssets) => {
-      const assetIndex = allAssets.findIndex((item) => item.id === asset.id);
-      setGallerySession(allAssets);
+      const sameTypeAssets = allAssets.filter((item) => item.mediaType === asset.mediaType);
+      const assetIndex = sameTypeAssets.findIndex((item) => item.id === asset.id);
+      setGallerySession(sameTypeAssets);
       router.push({
         pathname: `/photo/${asset.id}`,
         params: {
@@ -436,7 +398,7 @@ export default function PrivateScreen() {
             style={styles.headerButton}
             onPress={() => setActiveTab('active')}
           >
-            <ChevronLeft size={24} color={COLORS.text} />
+            <ChevronLeft size={24} color={colors.text} />
           </TouchableOpacity>
         )}
         <Text style={styles.headerTitle}>
@@ -449,14 +411,14 @@ export default function PrivateScreen() {
             style={styles.headerButton}
             onPress={() => setActiveTab('trash')}
           >
-            <Trash2 size={20} color={COLORS.text} />
+            <Trash2 size={20} color={colors.text} />
           </TouchableOpacity>
         )}
         <TouchableOpacity
           style={styles.headerButton}
           onPress={() => setShowChangePinModal(true)}
         >
-          <Settings size={20} color={COLORS.text} />
+          <Settings size={20} color={colors.text} />
         </TouchableOpacity>
       </View>
     </View>
@@ -465,14 +427,14 @@ export default function PrivateScreen() {
   if (!hasPin) {
     return (
       <View style={styles.center}>
-        <Lock size={52} color={COLORS.textMuted} />
+        <Lock size={52} color={colors.textMuted} />
         <Text style={styles.title}>Configura PIN de Privadas</Text>
         <Text style={styles.subtitle}>Protege tus archivos privados con un PIN de 4 a 8 digitos.</Text>
         <TextInput
           value={newPinInput}
           onChangeText={setNewPinInput}
           placeholder="PIN"
-          placeholderTextColor={COLORS.textMuted}
+          placeholderTextColor={colors.textMuted}
           keyboardType="number-pad"
           secureTextEntry
           style={styles.pinInput}
@@ -481,7 +443,7 @@ export default function PrivateScreen() {
           value={confirmPinInput}
           onChangeText={setConfirmPinInput}
           placeholder="Confirmar PIN"
-          placeholderTextColor={COLORS.textMuted}
+          placeholderTextColor={colors.textMuted}
           keyboardType="number-pad"
           secureTextEntry
           style={styles.pinInput}
@@ -508,14 +470,14 @@ export default function PrivateScreen() {
   if (!unlocked) {
     return (
       <View style={styles.center}>
-        <Lock size={52} color={COLORS.textMuted} />
+        <Lock size={52} color={colors.textMuted} />
         <Text style={styles.title}>Privadas bloqueadas</Text>
         <Text style={styles.subtitle}>Ingresa tu PIN para ver tus archivos privados.</Text>
         <TextInput
           value={pinInput}
           onChangeText={setPinInput}
           placeholder="PIN"
-          placeholderTextColor={COLORS.textMuted}
+          placeholderTextColor={colors.textMuted}
           keyboardType="number-pad"
           secureTextEntry
           style={styles.pinInput}
@@ -540,7 +502,7 @@ export default function PrivateScreen() {
       <View style={styles.container}>
         {renderHeader()}
         <View style={styles.center}>
-          <Lock size={52} color={COLORS.textMuted} />
+          <Lock size={52} color={colors.textMuted} />
           <Text style={styles.title}>
             {activeTab === 'trash' ? 'Papelera privada vacia' : activeTab === 'archived' ? 'No hay archivos archivados' : 'No hay archivos privados'}
           </Text>
@@ -577,10 +539,10 @@ export default function PrivateScreen() {
           </View>
           <View style={{ flexDirection: 'row', gap: SPACING.sm }}>
             <TouchableOpacity style={styles.headerButton} onPress={() => setShowActionMenu(true)} disabled={processing}>
-              <MoreVertical size={20} color={COLORS.text} />
+              <MoreVertical size={20} color={colors.text} />
             </TouchableOpacity>
             <TouchableOpacity style={styles.headerButton} onPress={clearSelection} disabled={processing}>
-              <X size={20} color={COLORS.text} />
+              <X size={20} color={colors.text} />
             </TouchableOpacity>
           </View>
         </View>
@@ -624,7 +586,7 @@ export default function PrivateScreen() {
                   onPress={() => { setShowActionMenu(false); handleShareSelected(); }} 
                   disabled={processing}
                 >
-                  <Share2 size={20} color={COLORS.text} />
+                  <Share2 size={20} color={colors.text} />
                   <Text style={[styles.selectionButtonText, { fontSize: 16 }]}>Compartir</Text>
                 </TouchableOpacity>
               ) : null}
@@ -634,7 +596,7 @@ export default function PrivateScreen() {
                   onPress={() => { setShowActionMenu(false); handleArchiveSelected(); }} 
                   disabled={processing}
                 >
-                  <Archive size={20} color={COLORS.text} />
+                  <Archive size={20} color={colors.text} />
                   <Text style={[styles.selectionButtonText, { fontSize: 16 }]}>Archivar</Text>
                 </TouchableOpacity>
               ) : null}
@@ -644,7 +606,7 @@ export default function PrivateScreen() {
                   onPress={() => { setShowActionMenu(false); setShowAlbumModal(true); }} 
                   disabled={processing}
                 >
-                  <FolderInput size={20} color={COLORS.text} />
+                  <FolderInput size={20} color={colors.text} />
                   <Text style={[styles.selectionButtonText, { fontSize: 16 }]}>Album</Text>
                 </TouchableOpacity>
               ) : null}
@@ -654,7 +616,7 @@ export default function PrivateScreen() {
                   onPress={() => { setShowActionMenu(false); handleRestoreArchivedSelected(); }} 
                   disabled={processing}
                 >
-                  <RotateCcw size={20} color={COLORS.text} />
+                  <RotateCcw size={20} color={colors.text} />
                   <Text style={[styles.selectionButtonText, { fontSize: 16 }]}>Desarchivar</Text>
                 </TouchableOpacity>
               ) : null}
@@ -663,7 +625,7 @@ export default function PrivateScreen() {
                 onPress={() => { setShowActionMenu(false); handleRestoreSelected(); }} 
                 disabled={processing}
               >
-                <RotateCcw size={20} color={COLORS.text} />
+                <RotateCcw size={20} color={colors.text} />
                 <Text style={[styles.selectionButtonText, { fontSize: 16 }]}>{activeTab === 'trash' ? 'Restaurar' : 'Sacar'}</Text>
               </TouchableOpacity>
               <TouchableOpacity 
@@ -671,7 +633,7 @@ export default function PrivateScreen() {
                 onPress={() => { setShowActionMenu(false); handleDeleteSelected(); }} 
                 disabled={processing}
               >
-                <Trash2 size={20} color={COLORS.text} />
+                <Trash2 size={20} color={colors.text} />
                 <Text style={[styles.selectionButtonText, { fontSize: 16 }]}>{activeTab === 'trash' ? 'Eliminar' : 'Papelera'}</Text>
               </TouchableOpacity>
             </View>
@@ -695,7 +657,7 @@ export default function PrivateScreen() {
               value={currentPinInput}
               onChangeText={setCurrentPinInput}
               placeholder="PIN actual"
-              placeholderTextColor={COLORS.textMuted}
+              placeholderTextColor={colors.textMuted}
               keyboardType="number-pad"
               secureTextEntry
               style={styles.modalInput}
@@ -705,7 +667,7 @@ export default function PrivateScreen() {
               value={changePinNew}
               onChangeText={setChangePinNew}
               placeholder="Nuevo PIN"
-              placeholderTextColor={COLORS.textMuted}
+              placeholderTextColor={colors.textMuted}
               keyboardType="number-pad"
               secureTextEntry
               style={styles.modalInput}
@@ -715,7 +677,7 @@ export default function PrivateScreen() {
               value={changePinConfirm}
               onChangeText={setChangePinConfirm}
               placeholder="Confirmar nuevo PIN"
-              placeholderTextColor={COLORS.textMuted}
+              placeholderTextColor={colors.textMuted}
               keyboardType="number-pad"
               secureTextEntry
               style={styles.modalInput}
@@ -750,28 +712,28 @@ export default function PrivateScreen() {
   );
 }
 
-const styles = StyleSheet.create({
+const createStyles = (colors: ThemeColors, mode: 'dark' | 'light') => StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: COLORS.background,
+    backgroundColor: colors.background,
   },
   center: {
     flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
     padding: SPACING.xl,
-    backgroundColor: COLORS.background,
+    backgroundColor: colors.background,
   },
   title: {
     marginTop: SPACING.md,
-    color: COLORS.text,
+    color: colors.text,
     fontSize: 20,
     fontWeight: '700',
     textAlign: 'center',
   },
   subtitle: {
     marginTop: SPACING.sm,
-    color: COLORS.textMuted,
+    color: colors.textMuted,
     textAlign: 'center',
   },
   pinInput: {
@@ -780,37 +742,37 @@ const styles = StyleSheet.create({
     height: 44,
     borderRadius: 10,
     borderWidth: 1,
-    borderColor: COLORS.border,
+    borderColor: colors.border,
     paddingHorizontal: 12,
-    color: COLORS.text,
+    color: colors.text,
     marginTop: SPACING.sm,
   },
   primaryButton: {
     marginTop: SPACING.md,
-    backgroundColor: COLORS.primary,
+    backgroundColor: colors.primary,
     borderRadius: 10,
     paddingHorizontal: 16,
     paddingVertical: 10,
   },
   primaryButtonText: {
-    color: COLORS.background,
+    color: colors.background,
     fontWeight: '700',
   },
   selectionBar: {
     borderBottomWidth: 1,
-    borderBottomColor: COLORS.border,
+    borderBottomColor: colors.border,
     paddingHorizontal: SPACING.md,
     paddingVertical: SPACING.sm,
-    backgroundColor: COLORS.surface,
+    backgroundColor: colors.surface,
   },
   tabsRow: {
     flexDirection: 'row',
     gap: SPACING.sm,
     paddingHorizontal: SPACING.md,
     paddingVertical: SPACING.sm,
-    backgroundColor: COLORS.surface,
+    backgroundColor: colors.surface,
     borderBottomWidth: 1,
-    borderBottomColor: COLORS.border,
+    borderBottomColor: colors.border,
   },
   tabButton: {
     flex: 1,
@@ -819,18 +781,18 @@ const styles = StyleSheet.create({
     paddingVertical: 10,
     paddingHorizontal: 8,
     borderRadius: 10,
-    backgroundColor: COLORS.border,
+    backgroundColor: colors.border,
   },
   tabButtonActive: {
-    backgroundColor: COLORS.primary,
+    backgroundColor: colors.primary,
   },
   tabButtonText: {
-    color: COLORS.text,
+    color: colors.text,
     fontSize: 12,
     fontWeight: '700',
   },
   tabButtonTextActive: {
-    color: COLORS.background,
+    color: colors.background,
   },
   autoCaptureBanner: {
     marginHorizontal: SPACING.md,
@@ -844,18 +806,18 @@ const styles = StyleSheet.create({
     borderColor: 'rgba(16,185,129,0.35)',
   },
   autoCaptureText: {
-    color: COLORS.text,
+    color: colors.text,
     fontSize: 12,
     fontWeight: '700',
   },
   selectionCount: {
-    color: COLORS.text,
+    color: colors.text,
     fontSize: 14,
     fontWeight: '700',
     marginBottom: 8,
   },
   processingText: {
-    color: COLORS.textMuted,
+    color: colors.textMuted,
     fontSize: 12,
     marginBottom: 8,
   },
@@ -870,13 +832,13 @@ const styles = StyleSheet.create({
     paddingHorizontal: 10,
     padding: 8,
     borderRadius: 10,
-    backgroundColor: COLORS.border,
+    backgroundColor: colors.border,
   },
   selectionDelete: {
-    backgroundColor: COLORS.error,
+    backgroundColor: colors.error,
   },
   selectionButtonText: {
-    color: COLORS.text,
+    color: colors.text,
     fontSize: 12,
     fontWeight: '600',
   },
@@ -887,26 +849,26 @@ const styles = StyleSheet.create({
     paddingHorizontal: SPACING.md,
     paddingVertical: SPACING.sm,
     borderBottomWidth: 1,
-    borderBottomColor: COLORS.border,
-    backgroundColor: COLORS.surface,
+    borderBottomColor: colors.border,
+    backgroundColor: colors.surface,
   },
   headerTitle: {
-    color: COLORS.text,
+    color: colors.text,
     fontSize: 18,
     fontWeight: '700',
   },
   headerButton: {
     padding: 8,
     borderRadius: 8,
-    backgroundColor: COLORS.border,
+    backgroundColor: colors.border,
   },
   modalOverlay: {
     flex: 1,
-    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+    backgroundColor: mode === 'light' ? 'rgba(60, 44, 29, 0.28)' : 'rgba(0, 0, 0, 0.5)',
     justifyContent: 'flex-end',
   },
   modalContent: {
-    backgroundColor: COLORS.surface,
+    backgroundColor: colors.surface,
     borderTopLeftRadius: 16,
     borderTopRightRadius: 16,
     paddingHorizontal: SPACING.lg,
@@ -914,13 +876,13 @@ const styles = StyleSheet.create({
     paddingBottom: SPACING.xl,
   },
   modalTitle: {
-    color: COLORS.text,
+    color: colors.text,
     fontSize: 20,
     fontWeight: '700',
     marginBottom: SPACING.sm,
   },
   modalSubtitle: {
-    color: COLORS.textMuted,
+    color: colors.textMuted,
     fontSize: 14,
     marginBottom: SPACING.md,
   },
@@ -928,9 +890,9 @@ const styles = StyleSheet.create({
     height: 44,
     borderRadius: 10,
     borderWidth: 1,
-    borderColor: COLORS.border,
+    borderColor: colors.border,
     paddingHorizontal: 12,
-    color: COLORS.text,
+    color: colors.text,
     marginBottom: SPACING.sm,
   },
   modalActions: {
@@ -946,14 +908,14 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   modalButtonCancel: {
-    backgroundColor: COLORS.border,
+    backgroundColor: colors.border,
   },
   modalButtonConfirm: {
-    backgroundColor: COLORS.primary,
+    backgroundColor: colors.primary,
   },
   modalButtonText: {
     fontWeight: '700',
     fontSize: 14,
-    color: COLORS.text,
+    color: colors.text,
   },
 });

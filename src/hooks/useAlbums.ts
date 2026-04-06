@@ -1,5 +1,6 @@
 import * as MediaLibrary from 'expo-media-library';
 import { useState, useEffect } from 'react';
+import { useMediaRefreshStore } from '../store/useMediaRefreshStore';
 
 export interface AlbumWithCover extends MediaLibrary.Album {
   coverUri?: string;
@@ -8,12 +9,13 @@ export interface AlbumWithCover extends MediaLibrary.Album {
 export function useAlbums(isGranted: boolean) {
   const [albums, setAlbums] = useState<AlbumWithCover[]>([]);
   const [loading, setLoading] = useState(false);
+  const refreshToken = useMediaRefreshStore((state) => state.refreshToken);
 
   useEffect(() => {
     if (isGranted) {
       loadAlbums();
     }
-  }, [isGranted]);
+  }, [isGranted, refreshToken]);
 
   const loadAlbums = async () => {
     setLoading(true);

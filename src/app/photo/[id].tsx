@@ -3,6 +3,7 @@ import { Alert, Dimensions, Pressable, ScrollView, StyleSheet, Text, View, type 
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { Image } from 'expo-image';
 import { ResizeMode, Video, type AVPlaybackStatus } from 'expo-av';
+import * as FileSystem from 'expo-file-system/legacy';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import Animated, {
   runOnJS,
@@ -11,13 +12,32 @@ import Animated, {
   withSpring,
   withTiming,
 } from 'react-native-reanimated';
-import { Info, Minus, Pause, Play, Plus, Share2, Trash2, Volume2, X } from 'lucide-react-native';
+import {
+  Crop,
+  FlipHorizontal2,
+  FlipVertical2,
+  Info,
+  Minus,
+  Pause,
+  Play,
+  Plus,
+  RotateCw,
+  Save,
+  Share2,
+  Trash2,
+  Volume2,
+  X,
+} from 'lucide-react-native';
 import * as MediaLibrary from 'expo-media-library';
 import ConfirmationModal from '../../components/ConfirmationModal';
 import { COLORS, SPACING } from '../../constants/theme';
 import { usePrivateVault } from '../../hooks/usePrivateVault';
 import { useTrash } from '../../hooks/useTrash';
-import { getGallerySession, removeAssetFromGallerySession } from '../../store/gallerySession';
+import {
+  getGallerySession,
+  removeAssetFromGallerySession,
+  replaceAssetInGallerySession,
+} from '../../store/gallerySession';
 import { prepareShareUri, sharePreparedUri } from '../../utils/shareMedia';
 
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
@@ -57,6 +77,15 @@ const SPEED_OPTIONS = [0.5, 1, 1.25, 1.5, 2];
 const FINE_STEP_OPTIONS = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
 const SEEK_STEP_MS = 10_000;
 
+let ImageManipulatorModule: any = null;
+try {
+  // Use lazy runtime import so old dev builds without the native module don't crash at startup.
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  ImageManipulatorModule = require('expo-image-manipulator');
+} catch {
+  ImageManipulatorModule = null;
+}
+
 export default function PhotoDetailScreen() {
   const params = useLocalSearchParams<{ id: string; uri: string; filename: string; index?: string; source?: string }>();
   const router = useRouter();
@@ -83,6 +112,10 @@ export default function PhotoDetailScreen() {
   const [assetInfo, setAssetInfo] = useState<MediaLibrary.AssetInfo | null>(null);
   const [assetInfoLoading, setAssetInfoLoading] = useState(false);
   const [assetInfoPermissionLimited, setAssetInfoPermissionLimited] = useState(false);
+  const [editedUri, setEditedUri] = useState<string | null>(null);
+  const [editWidth, setEditWidth] = useState(0);
+  const [editHeight, setEditHeight] = useState(0);
+  const [editingBusy, setEditingBusy] = useState(false);
 
   const videoRef = useRef<Video | null>(null);
   const isSeekingRef = useRef(false);
@@ -108,6 +141,8 @@ export default function PhotoDetailScreen() {
   const isPrivateSource =
     params.source === 'private' || params.source === 'private-archived' || params.source === 'private-trash';
   const isPrivateTrashSource = params.source === 'private-trash';
+  const displayUri = editedUri || uri;
+  const hasPendingEdits = Boolean(editedUri);
 
   const scale = useSharedValue(1);
   const savedScale = useSharedValue(1);
@@ -150,8 +185,19 @@ export default function PhotoDetailScreen() {
     setFineStepUnits(3);
     setAssetInfo(null);
     setAssetInfoPermissionLimited(false);
+    setEditedUri(null);
+    setEditWidth(currentAsset.width || 0);
+    setEditHeight(currentAsset.height || 0);
+    setEditingBusy(false);
     chromeOpacity.value = withTiming(1, { duration: 140 });
   };
+
+  useEffect(() => {
+    setEditedUri(null);
+    setEditWidth(currentAsset.width || 0);
+    setEditHeight(currentAsset.height || 0);
+    setEditingBusy(false);
+  }, [currentAsset.id, currentAsset.height, currentAsset.width]);
 
   useEffect(() => {
     if (!isVideo) {
@@ -198,19 +244,120 @@ export default function PhotoDetailScreen() {
   }, [showInfo, currentAsset.id]);
 
   const goNext = () => {
-    if (galleryIndex < galleryAssets.length - 1) {
-      setGalleryIndex((prev) => prev + 1);
-      resetTransforms();
-      resetPerAssetUi();
-    }
+    if (galleryAssets.length <= 1) return;
+    setGalleryIndex((prev) => (prev + 1) % galleryAssets.length);
+    resetTransforms();
+    resetPerAssetUi();
   };
 
   const goPrevious = () => {
-    if (galleryIndex > 0) {
-      setGalleryIndex((prev) => prev - 1);
-      resetTransforms();
-      resetPerAssetUi();
+    if (galleryAssets.length <= 1) return;
+    setGalleryIndex((prev) => (prev - 1 + galleryAssets.length) % galleryAssets.length);
+    resetTransforms();
+    resetPerAssetUi();
+  };
+
+  const applyEditActions = async (actions: any[]) => {
+    if (isVideo || editingBusy) return;
+    if (!ImageManipulatorModule?.manipulateAsync) {
+      Alert.alert('Editor no disponible', 'Actualiza/reinstala el build para habilitar la edicion de fotos.');
+      return;
     }
+
+    setEditingBusy(true);
+    try {
+      const result = await ImageManipulatorModule.manipulateAsync(displayUri, actions, {
+        compress: 1,
+        format: ImageManipulatorModule.SaveFormat.JPEG,
+      });
+
+      setEditedUri(result.uri);
+      setEditWidth(result.width || editWidth);
+      setEditHeight(result.height || editHeight);
+    } catch (error) {
+      console.error('Error applying image edit:', error);
+      Alert.alert('Error', 'No se pudo aplicar esta edicion.');
+    } finally {
+      setEditingBusy(false);
+    }
+  };
+
+  const cropCenterSquare = async () => {
+    if (isVideo) return;
+    const srcW = Math.max(1, editWidth || currentAsset.width || SCREEN_WIDTH);
+    const srcH = Math.max(1, editHeight || currentAsset.height || SCREEN_HEIGHT);
+    const side = Math.min(srcW, srcH);
+    const originX = Math.max(0, Math.floor((srcW - side) / 2));
+    const originY = Math.max(0, Math.floor((srcH - side) / 2));
+
+    await applyEditActions([
+      {
+        crop: {
+          originX,
+          originY,
+          width: Math.floor(side),
+          height: Math.floor(side),
+        },
+      },
+    ]);
+  };
+
+  const saveEditedImage = async (replaceOriginal: boolean) => {
+    if (!editedUri || isVideo) return;
+
+    try {
+      setEditingBusy(true);
+
+      if (!replaceOriginal) {
+        await MediaLibrary.createAssetAsync(editedUri);
+        setEditedUri(null);
+        Alert.alert('Listo', 'Edicion guardada como copia.');
+        return;
+      }
+
+      if (isPrivateSource) {
+        await FileSystem.deleteAsync(uri, { idempotent: true });
+        await FileSystem.copyAsync({ from: editedUri, to: uri });
+
+        const updatedAsset = {
+          ...currentAsset,
+          uri,
+          width: editWidth || currentAsset.width,
+          height: editHeight || currentAsset.height,
+        } as MediaLibrary.Asset;
+
+        replaceAssetInGallerySession(currentAsset.id, updatedAsset);
+        setEditedUri(null);
+        Alert.alert('Listo', 'Archivo privado reemplazado.');
+        return;
+      }
+
+      const newAsset = await MediaLibrary.createAssetAsync(editedUri);
+      try {
+        await MediaLibrary.deleteAssetsAsync([currentAsset.id]);
+      } catch {
+        // If deletion fails, keep both files and still preserve edited result.
+      }
+
+      replaceAssetInGallerySession(currentAsset.id, newAsset);
+      setEditedUri(null);
+      Alert.alert('Listo', 'Imagen original reemplazada por la editada.');
+    } catch (error) {
+      console.error('Error saving edited image:', error);
+      Alert.alert('Error', 'No se pudo guardar la edicion.');
+    } finally {
+      setEditingBusy(false);
+    }
+  };
+
+  const openSaveEditedPrompt = () => {
+    if (!hasPendingEdits || isVideo) return;
+
+    Alert.alert('Guardar edicion', 'Elige como quieres guardar los cambios.', [
+      { text: 'Cancelar', style: 'cancel' },
+      { text: 'Guardar copia', onPress: () => void saveEditedImage(false) },
+      { text: 'Reemplazar original', style: 'destructive', onPress: () => void saveEditedImage(true) },
+    ]);
   };
 
   const closeBySwipeDown = () => {
@@ -502,7 +649,7 @@ export default function PhotoDetailScreen() {
             <>
               <Video
                 ref={videoRef}
-                source={{ uri }}
+                source={{ uri: displayUri }}
                 style={styles.video}
                 useNativeControls={false}
                 resizeMode={ResizeMode.CONTAIN}
@@ -524,7 +671,7 @@ export default function PhotoDetailScreen() {
             </>
           ) : (
             <Image
-              source={{ uri }}
+              source={{ uri: displayUri }}
               style={styles.image}
               contentFit="contain"
               transition={220}
@@ -730,6 +877,52 @@ export default function PhotoDetailScreen() {
       ) : null}
 
       <Animated.View pointerEvents={chromeVisible ? 'auto' : 'none'} style={[styles.footer, chromeAnimatedStyle]}>
+        {!isVideo ? (
+          <View style={styles.editActionsRow}>
+            <Pressable onPress={cropCenterSquare} style={styles.editActionButton} disabled={editingBusy}>
+              <Crop color={COLORS.textMuted} size={16} />
+              <Text style={styles.editActionText}>Recorte</Text>
+            </Pressable>
+            <Pressable
+              onPress={() => void applyEditActions([{ rotate: 90 }])}
+              style={styles.editActionButton}
+              disabled={editingBusy}
+            >
+              <RotateCw color={COLORS.textMuted} size={16} />
+              <Text style={styles.editActionText}>Girar</Text>
+            </Pressable>
+            <Pressable
+              onPress={() =>
+                void applyEditActions([{ flip: ImageManipulatorModule?.FlipType?.Horizontal || 'horizontal' }])
+              }
+              style={styles.editActionButton}
+              disabled={editingBusy}
+            >
+              <FlipHorizontal2 color={COLORS.textMuted} size={16} />
+              <Text style={styles.editActionText}>Espejo</Text>
+            </Pressable>
+            <Pressable
+              onPress={() =>
+                void applyEditActions([{ flip: ImageManipulatorModule?.FlipType?.Vertical || 'vertical' }])
+              }
+              style={styles.editActionButton}
+              disabled={editingBusy}
+            >
+              <FlipVertical2 color={COLORS.textMuted} size={16} />
+              <Text style={styles.editActionText}>Voltear</Text>
+            </Pressable>
+            <Pressable
+              onPress={openSaveEditedPrompt}
+              style={[styles.editActionButton, hasPendingEdits ? styles.editActionPrimary : null]}
+              disabled={!hasPendingEdits || editingBusy}
+            >
+              <Save color={hasPendingEdits ? COLORS.background : COLORS.textMuted} size={16} />
+              <Text style={[styles.editActionText, hasPendingEdits ? styles.editActionPrimaryText : null]}>
+                Guardar
+              </Text>
+            </Pressable>
+          </View>
+        ) : null}
         <Pressable onPress={() => setShowInfo(true)} style={styles.infoButton}>
           <Info color={COLORS.textMuted} size={18} />
           <Text style={styles.infoText}>Ver detalles</Text>
@@ -1167,6 +1360,34 @@ const styles = StyleSheet.create({
     bottom: 0,
     alignItems: 'center',
     padding: SPACING.xl,
+  },
+  editActionsRow: {
+    width: '100%',
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+    justifyContent: 'center',
+    marginBottom: 10,
+  },
+  editActionButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    borderRadius: 999,
+    backgroundColor: 'rgba(255,255,255,0.12)',
+  },
+  editActionPrimary: {
+    backgroundColor: COLORS.primary,
+  },
+  editActionText: {
+    color: COLORS.textMuted,
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  editActionPrimaryText: {
+    color: COLORS.background,
   },
   infoButton: {
     flexDirection: 'row',

@@ -2,11 +2,17 @@ import { Share } from 'react-native';
 import * as FileSystem from 'expo-file-system/legacy';
 import * as MediaLibrary from 'expo-media-library';
 import * as Sharing from 'expo-sharing';
+import JSZip from 'jszip';
 
 interface PrepareShareUriOptions {
   assetId?: string;
   fallbackUri?: string;
   filename?: string;
+}
+
+interface PreparedShareItem {
+  uri: string;
+  filename: string;
 }
 
 const hasExtension = (name: string) => /\.[a-z0-9]{2,6}$/i.test(name);
@@ -76,4 +82,61 @@ export async function sharePreparedUri(shareUri: string, dialogTitle?: string): 
     title: dialogTitle || 'Compartir archivo',
     url: shareUri,
   });
+}
+
+export async function prepareShareUris(optionsList: PrepareShareUriOptions[]): Promise<PreparedShareItem[]> {
+  const prepared: PreparedShareItem[] = [];
+  const seen = new Set<string>();
+
+  for (const options of optionsList) {
+    const uri = await prepareShareUri(options);
+    if (seen.has(uri)) continue;
+    seen.add(uri);
+
+    const fallbackName = options.filename || options.fallbackUri?.split('/').pop() || 'shared-media.bin';
+    prepared.push({ uri, filename: hasExtension(fallbackName) ? fallbackName : `${fallbackName}.bin` });
+  }
+
+  return prepared;
+}
+
+const sanitizeFilename = (filename: string, index: number) => {
+  const safe = filename.replace(/[\\/:*?"<>|]/g, '_').trim();
+  return safe.length > 0 ? safe : `media-${index + 1}.bin`;
+};
+
+async function buildZipFromPreparedItems(items: PreparedShareItem[]): Promise<string> {
+  const zip = new JSZip();
+
+  for (let i = 0; i < items.length; i += 1) {
+    const item = items[i];
+    const fileBase64 = await FileSystem.readAsStringAsync(item.uri, {
+      encoding: FileSystem.EncodingType.Base64,
+    });
+    zip.file(sanitizeFilename(item.filename, i), fileBase64, { base64: true });
+  }
+
+  const outputBase64 = await zip.generateAsync({ type: 'base64', compression: 'DEFLATE' });
+  const baseDir = FileSystem.cacheDirectory || FileSystem.documentDirectory;
+  const zipUri = `${baseDir}${Date.now()}_galetiki-share.zip`;
+
+  await FileSystem.writeAsStringAsync(zipUri, outputBase64, {
+    encoding: FileSystem.EncodingType.Base64,
+  });
+
+  return zipUri;
+}
+
+export async function sharePreparedUris(items: PreparedShareItem[], dialogTitle?: string): Promise<void> {
+  if (items.length === 0) {
+    throw new Error('No files to share.');
+  }
+
+  if (items.length === 1) {
+    await sharePreparedUri(items[0].uri, dialogTitle || 'Compartir archivo');
+    return;
+  }
+
+  const zipUri = await buildZipFromPreparedItems(items);
+  await sharePreparedUri(zipUri, dialogTitle || 'Compartir archivos');
 }

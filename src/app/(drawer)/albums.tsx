@@ -1,12 +1,15 @@
 import React from 'react';
 import { StyleSheet, View, Text, FlatList, ActivityIndicator, TouchableOpacity, Linking } from 'react-native';
-import { COLORS, SPACING } from '../../constants/theme';
+import { SPACING } from '../../constants/theme';
 import { useAlbums, AlbumWithCover } from '../../hooks/useAlbums';
 import { usePermissions } from '../../hooks/usePermissions';
 import AlbumCard from '../../components/AlbumCard';
 import { useRouter } from 'expo-router';
+import { useAppTheme } from '../../theme/AppThemeContext';
 
 export default function AlbumsScreen() {
+  const { colors } = useAppTheme();
+  const styles = React.useMemo(() => createStyles(colors), [colors]);
   const { isGranted, isLimited, isUnsupportedExpoGo, checkPermissions, requestFullAccessAgain } = usePermissions();
   const { albums, loading } = useAlbums(isGranted);
   const router = useRouter();
@@ -64,7 +67,7 @@ export default function AlbumsScreen() {
   if (loading && albums.length === 0) {
     return (
       <View style={styles.center}>
-        <ActivityIndicator color={COLORS.primary} size="large" />
+        <ActivityIndicator color={colors.primary} size="large" />
       </View>
     );
   }
@@ -93,44 +96,50 @@ export default function AlbumsScreen() {
   );
 }
 
-const styles = StyleSheet.create({
+const createStyles = (colors: {
+  background: string;
+  text: string;
+  textMuted: string;
+  primary: string;
+  border: string;
+}) => StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: COLORS.background,
+    backgroundColor: colors.background,
   },
   center: {
     flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
     padding: SPACING.lg,
-    backgroundColor: COLORS.background,
+    backgroundColor: colors.background,
   },
   title: {
     fontSize: 22,
     fontWeight: '700',
-    color: COLORS.text,
+    color: colors.text,
     textAlign: 'center',
   },
   subtitle: {
     marginTop: SPACING.md,
-    color: COLORS.textMuted,
+    color: colors.textMuted,
     textAlign: 'center',
     fontSize: 14,
   },
   button: {
     marginTop: SPACING.lg,
-    backgroundColor: COLORS.primary,
+    backgroundColor: colors.primary,
     paddingHorizontal: SPACING.lg,
     paddingVertical: SPACING.md,
     borderRadius: 10,
   },
   buttonText: {
-    color: COLORS.background,
+    color: colors.background,
     fontWeight: '700',
   },
   secondaryButton: {
     marginTop: SPACING.sm,
-    backgroundColor: COLORS.border,
+    backgroundColor: colors.border,
   },
   list: {
     padding: SPACING.md,

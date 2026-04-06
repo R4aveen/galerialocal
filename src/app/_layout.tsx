@@ -2,15 +2,27 @@ import { Stack, usePathname, useRouter } from 'expo-router';
 import { COLORS } from '../constants/theme';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { AppState } from 'react-native';
 import { initTimestampCaching } from '../utils/mediaDate';
 import { flushJsonCacheToDisk } from '../utils/jsonTimestampCache';
+import { AppThemeProvider, useAppTheme } from '../theme/AppThemeContext';
+import AnimatedSplash from '../components/AnimatedSplash';
 
 export default function RootLayout() {
+  return (
+    <AppThemeProvider>
+      <RootLayoutInner />
+    </AppThemeProvider>
+  );
+}
+
+function RootLayoutInner() {
   const router = useRouter();
   const pathname = usePathname();
   const forcedHomeRef = useRef(false);
+  const { colors } = useAppTheme();
+  const [splashDone, setSplashDone] = useState(false);
 
   useEffect(() => {
     // Initialize timestamp JSON cache on app startup
@@ -49,7 +61,7 @@ export default function RootLayout() {
         <Stack
           screenOptions={{
             headerShown: false,
-            contentStyle: { backgroundColor: COLORS.background },
+            contentStyle: { backgroundColor: colors.background },
           }}
           initialRouteName="(drawer)"
         >
@@ -62,6 +74,7 @@ export default function RootLayout() {
             }} 
           />
         </Stack>
+        {!splashDone ? <AnimatedSplash onFinish={() => setSplashDone(true)} /> : null}
       </SafeAreaProvider>
     </GestureHandlerRootView>
   );

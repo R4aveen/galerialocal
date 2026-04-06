@@ -2,7 +2,8 @@ import * as MediaLibrary from 'expo-media-library';
 import GaleriaMedia from '../../modules/galeria-media';
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { getSafeAssetTimestamp, hydrateTimestampCache, sortAssetsByTimestamp } from '../utils/mediaDate';
-import { dedupeAssetsById } from '../utils/mediaAssets';
+import { dedupeAssetsById, getAssetIdentityKey } from '../utils/mediaAssets';
+import { useMediaRefreshStore } from '../store/useMediaRefreshStore';
 
 export type MediaFilter = 'all' | 'photo' | 'video' | 'screenshot';
 export type DateFilter = 'all' | 'month' | 'year';
@@ -41,6 +42,8 @@ const CACHE_TTL_MS = 90_000;
 const MAX_CACHE_ENTRIES = 12;
 const PREFETCH_TARGET_ALL = 800;
 const PREFETCH_TARGET_FILTERED = 400;
+const ALBUM_BACKFILL_PER_PAGE = 280;
+const ALBUM_BACKFILL_MAX_ASSETS = 40000;
 const mediaQueryCache = new Map<string, MediaQueryCacheEntry>();
 
 const buildCacheKey = (mediaFilter: MediaFilter, sortOrder: SortOrder) => `${mediaFilter}::${sortOrder}`;
@@ -78,6 +81,8 @@ export function useMediaLibrary(isGranted: boolean, options: UseMediaLibraryOpti
   const loadingRef = useRef(false);
   const assetsRef = useRef<MediaLibrary.Asset[]>([]);
   const queryVersionRef = useRef(0);
+  const backfilledKeyRef = useRef<string | null>(null);
+  const refreshToken = useMediaRefreshStore((state) => state.refreshToken);
   const cacheKey = useMemo(
     () => buildCacheKey(options.mediaFilter, options.sortOrder),
     [options.mediaFilter, options.sortOrder]
@@ -86,6 +91,85 @@ export function useMediaLibrary(isGranted: boolean, options: UseMediaLibraryOpti
   useEffect(() => {
     assetsRef.current = assets;
   }, [assets]);
+
+  const backfillFromAlbums = useCallback(async (requestVersion: number) => {
+    // This pass scans album paths (including app-specific folders like WhatsApp variants)
+    // to recover assets that might not appear in the global query on some devices.
+    if (options.mediaFilter !== 'all' || options.dateFilter !== 'all') return;
+    if (backfilledKeyRef.current === cacheKey) return;
+
+    try {
+      const albums = await MediaLibrary.getAlbumsAsync({ includeSmartAlbums: true });
+      const prioritized = [...albums].sort((a, b) => {
+        const aName = (a.title || '').toLowerCase();
+        const bName = (b.title || '').toLowerCase();
+        const aPriority = /whatsapp|wsp|telegram|camera|download/.test(aName) ? 0 : 1;
+        const bPriority = /whatsapp|wsp|telegram|camera|download/.test(bName) ? 0 : 1;
+        return aPriority - bPriority;
+      });
+
+      const collected: MediaLibrary.Asset[] = [];
+      for (const album of prioritized) {
+        if (collected.length >= ALBUM_BACKFILL_MAX_ASSETS) break;
+
+        try {
+          let after: string | undefined;
+          let hasNextPage = true;
+
+          while (hasNextPage && collected.length < ALBUM_BACKFILL_MAX_ASSETS) {
+            const page = await MediaLibrary.getAssetsAsync({
+              album: album.id,
+              first: ALBUM_BACKFILL_PER_PAGE,
+              after,
+              mediaType: [MediaLibrary.MediaType.photo, MediaLibrary.MediaType.video],
+              sortBy: [[MediaLibrary.SortBy.creationTime, options.sortOrder === 'oldest']],
+            });
+
+            if (page.assets.length === 0) {
+              break;
+            }
+
+            collected.push(...page.assets);
+            hasNextPage = page.hasNextPage;
+            after = page.endCursor;
+          }
+        } catch {
+          // Ignore one album failure and continue scanning the rest.
+        }
+      }
+
+      if (requestVersion !== queryVersionRef.current) {
+        return;
+      }
+
+      if (collected.length === 0) {
+        // Allow retry on next refresh/load. Some devices return empty album lists transiently.
+        if (backfilledKeyRef.current === cacheKey) {
+          backfilledKeyRef.current = null;
+        }
+        return;
+      }
+
+      backfilledKeyRef.current = cacheKey;
+
+      setAssets((prev) => {
+        const merged = dedupeAssetsById([...prev, ...collected]);
+        const ordered = sortByCreationTime(merged, options.sortOrder);
+        assetsRef.current = ordered;
+        updateCacheEntry(cacheKey, {
+          assets: ordered,
+          hasNextPage,
+          endCursor,
+          updatedAt: Date.now(),
+        });
+        return ordered;
+      });
+
+      void hydrateTimestampCache(collected);
+    } catch (error) {
+      console.error('Error during album backfill scan:', error);
+    }
+  }, [cacheKey, endCursor, hasNextPage, options.dateFilter, options.mediaFilter, options.sortOrder]);
 
   const loadAssets = useCallback(async (after?: string, reset = false) => {
     if (!isGranted || loadingRef.current || (!after && !reset && assetsRef.current.length > 0)) {
@@ -138,6 +222,10 @@ export function useMediaLibrary(isGranted: boolean, options: UseMediaLibraryOpti
       setHasNextPage(next);
       setEndCursor(cursor);
 
+      if (!after && options.mediaFilter === 'all' && options.dateFilter === 'all') {
+        void backfillFromAlbums(requestVersion);
+      }
+
       // Load timestamp cache in background (non-blocking):
       void hydrateTimestampCache(mergedBase).then(() => {
         // After timestamp cache is populated, trigger re-sort if needed:
@@ -161,7 +249,7 @@ export function useMediaLibrary(isGranted: boolean, options: UseMediaLibraryOpti
       loadingRef.current = false;
       setLoading(false);
     }
-  }, [cacheKey, isGranted, options.mediaFilter, options.sortOrder]);
+  }, [backfillFromAlbums, cacheKey, isGranted, options.dateFilter, options.mediaFilter, options.sortOrder]);
 
   useEffect(() => {
     if (!isGranted) return;
@@ -176,9 +264,11 @@ export function useMediaLibrary(isGranted: boolean, options: UseMediaLibraryOpti
 
     const cached = readCacheEntry(cacheKey);
     const isFresh = cached ? Date.now() - cached.updatedAt <= CACHE_TTL_MS : false;
+    const cachedIsEmpty = !cached || cached.assets.length === 0;
 
     queryVersionRef.current += 1;
     const requestVersion = queryVersionRef.current;
+    backfilledKeyRef.current = null;
     
     // Show cached assets IMMEDIATELY without sorting:
     if (cached) {
@@ -205,7 +295,12 @@ export function useMediaLibrary(isGranted: boolean, options: UseMediaLibraryOpti
       });
     }
 
-    if (!cached || !isFresh) {
+    // Empty cache snapshots are treated as stale to avoid getting stuck at 0 items.
+    if (cachedIsEmpty) {
+      mediaQueryCache.delete(cacheKey);
+    }
+
+    if (!cached || !isFresh || cachedIsEmpty) {
       loadAssets(undefined, true);
     }
 
@@ -213,6 +308,19 @@ export function useMediaLibrary(isGranted: boolean, options: UseMediaLibraryOpti
       subscription.remove();
     };
   }, [isGranted, cacheKey, options.dateFilter, options.sortOrder, loadAssets]);
+
+  useEffect(() => {
+    if (!isGranted) return;
+
+    mediaQueryCache.clear();
+    backfilledKeyRef.current = null;
+    queryVersionRef.current += 1;
+    setAssets([]);
+    assetsRef.current = [];
+    setHasNextPage(true);
+    setEndCursor(undefined);
+    void loadAssets(undefined, true);
+  }, [isGranted, loadAssets, refreshToken]);
 
   const filteredAssets = useMemo(() => {
     const now = Date.now();
@@ -225,8 +333,9 @@ export function useMediaLibrary(isGranted: boolean, options: UseMediaLibraryOpti
     }
 
     return dedupeAssetsById(assets).filter((asset) => {
-      // Exclude items that are in trash
-      if (excludeSet.has(asset.id)) return false;
+      // Exclude items using collision-safe identity keys (id+uri when available).
+      const assetKey = getAssetIdentityKey(asset);
+      if (excludeSet.has(assetKey)) return false;
 
       if (options.mediaFilter === 'photo' && asset.mediaType !== 'photo') return false;
       if (options.mediaFilter === 'video' && asset.mediaType !== 'video') return false;
@@ -270,6 +379,20 @@ export function useMediaLibrary(isGranted: boolean, options: UseMediaLibraryOpti
     options.dateFilter,
     loadAssets,
   ]);
+
+  useEffect(() => {
+    if (!isGranted) return;
+    if (loading) return;
+    if (options.mediaFilter !== 'all' || options.dateFilter !== 'all') return;
+    if (assets.length > 0) return;
+
+    const retryTimer = setTimeout(() => {
+      // Retry album backfill if global query is still empty in the main view.
+      void backfillFromAlbums(queryVersionRef.current);
+    }, 180);
+
+    return () => clearTimeout(retryTimer);
+  }, [assets.length, backfillFromAlbums, isGranted, loading, options.dateFilter, options.mediaFilter]);
 
   const loadMore = () => {
     if (hasNextPage && endCursor) {

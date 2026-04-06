@@ -10,7 +10,6 @@ import {
   TouchableOpacity,
   ScrollView,
   InteractionManager,
-  SafeAreaView,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useFocusEffect } from '@react-navigation/native';
@@ -21,22 +20,26 @@ import { usePrivateVault } from '../../hooks/usePrivateVault';
 import { useAlbumManager } from '../../hooks/useAlbumManager';
 import PhotoGrid from '../../components/PhotoGrid';
 import AlbumManagerModal from '../../components/AlbumManagerModal';
-import { COLORS, SPACING } from '../../constants/theme';
+import { SPACING } from '../../constants/theme';
 import { CameraOff, FolderInput, Lock, Share2, Trash2, X } from 'lucide-react-native';
 import { useRouter } from 'expo-router';
 import { setGallerySession } from '../../store/gallerySession';
 import { useSelectionStore } from '../../store/useSelectionStore';
 import { usePhotoSelectionHandlers } from '../../hooks/usePhotoSelectionHandlers';
-import { prepareShareUri, sharePreparedUri } from '../../utils/shareMedia';
+import { prepareShareUris, sharePreparedUris } from '../../utils/shareMedia';
+import { ThemeColors, useAppTheme } from '../../theme/AppThemeContext';
+import { getAssetIdentityKey } from '../../utils/mediaAssets';
 
 export default function AllPhotosScreen() {
+  const { colors, mode } = useAppTheme();
+  const styles = useMemo(() => createStyles(colors, mode), [colors, mode]);
   const { isGranted, isLimited, requestPermission, isUnsupportedExpoGo, checkPermissions, requestFullAccessAgain } = usePermissions();
 
   if (isUnsupportedExpoGo) {
     return (
       <View style={styles.container}>
         <View style={styles.center}>
-          <CameraOff size={64} color={COLORS.textMuted} />
+          <CameraOff size={64} color={colors.textMuted} />
           <Text style={styles.title}>Limitacion de Expo Go</Text>
           <Text style={styles.subtitle}>
             En Android, Expo Go ya no da acceso completo a la galeria. Usa un Development Build para probar esta funcion.
@@ -50,7 +53,7 @@ export default function AllPhotosScreen() {
     return (
       <View style={styles.container}>
         <View style={styles.center}>
-          <CameraOff size={64} color={COLORS.textMuted} />
+          <CameraOff size={64} color={colors.textMuted} />
           <Text style={styles.title}>Acceso limitado a fotos</Text>
           <Text style={styles.subtitle}>
             Android te dio acceso solo a fotos seleccionadas. Para ver TODAS las imagenes del dispositivo (incluyendo
@@ -83,7 +86,7 @@ export default function AllPhotosScreen() {
     return (
       <View style={styles.container}>
         <View style={styles.center}>
-          <CameraOff size={64} color={COLORS.textMuted} />
+          <CameraOff size={64} color={colors.textMuted} />
           <Text style={styles.title}>Sin acceso a fotos</Text>
           <Text style={styles.subtitle}>
             Necesitamos permiso para mostrar tus recuerdos locales.
@@ -100,6 +103,8 @@ export default function AllPhotosScreen() {
 }
 
 function GalleryEngine({ isGranted, requestPermission }: any) {
+  const { colors, mode } = useAppTheme();
+  const styles = useMemo(() => createStyles(colors, mode), [colors, mode]);
   const { getTrashIds, refreshTrash, moveManyToTrash } = useTrash();
   const { getPrivateIds, refreshPrivate, hideManyInPrivate } = usePrivateVault();
   const { albums, loading: loadingAlbums, refreshAlbums, moveAssetsToAlbum, createAlbumFromAssets } = useAlbumManager(Boolean(isGranted));
@@ -201,8 +206,9 @@ function GalleryEngine({ isGranted, requestPermission }: any) {
   const { onPhotoPress: handlePhotoPress, onPhotoLongPress: handlePhotoLongPress } = usePhotoSelectionHandlers({
     assets,
     onOpenAsset: (asset, allAssets) => {
-      const assetIndex = allAssets.findIndex((item) => item.id === asset.id);
-      setGallerySession(allAssets);
+      const sameTypeAssets = allAssets.filter((item) => item.mediaType === asset.mediaType);
+      const assetIndex = sameTypeAssets.findIndex((item) => item.id === asset.id);
+      setGallerySession(sameTypeAssets);
       router.push({
         pathname: `/photo/${asset.id}`,
         params: {
@@ -218,17 +224,14 @@ function GalleryEngine({ isGranted, requestPermission }: any) {
     if (selectedAssets.length === 0) return;
     try {
       clearSelection();
-      if (selectedAssets.length > 1) {
-        Alert.alert('Compartir', 'Por ahora se comparte un archivo a la vez. Se abrira el primero seleccionado.');
-      }
-
-      const item = selectedAssets[0];
-      const shareUri = await prepareShareUri({
-        assetId: item.id,
-        fallbackUri: item.uri,
-        filename: item.filename,
-      });
-      await sharePreparedUri(shareUri, 'Compartir archivo');
+      const prepared = await prepareShareUris(
+        selectedAssets.map((item) => ({
+          assetId: item.id,
+          fallbackUri: item.uri,
+          filename: item.filename,
+        }))
+      );
+      await sharePreparedUris(prepared, selectedAssets.length > 1 ? 'Compartir archivos' : 'Compartir archivo');
     } catch (error) {
       console.error('Error sharing selected assets:', error);
       Alert.alert('Error al compartir', 'No se pudo compartir el archivo seleccionado.');
@@ -257,7 +260,8 @@ function GalleryEngine({ isGranted, requestPermission }: any) {
               });
 
               if (movedIds.length > 0) {
-                setOptimisticExcludedIds((prev) => Array.from(new Set([...prev, ...movedIds])));
+                const movedKeys = selectedAssets.map((asset) => getAssetIdentityKey(asset));
+                setOptimisticExcludedIds((prev) => Array.from(new Set([...prev, ...movedKeys])));
               }
 
               await refreshTrash();
@@ -331,7 +335,7 @@ function GalleryEngine({ isGranted, requestPermission }: any) {
     if (selectedAssets.length === 0 || bulkProcessing) return;
 
     const assetsToMove = [...selectedAssets];
-    const idsToMove = assetsToMove.map((asset) => asset.id);
+    const idsToMove = assetsToMove.map((asset) => getAssetIdentityKey(asset));
     if (idsToMove.length === 0) return;
 
     // UX: remove instantly and continue in background.
@@ -367,7 +371,7 @@ function GalleryEngine({ isGranted, requestPermission }: any) {
         <View style={styles.selectionTopBar}>
           <View style={styles.selectionTopBarLeft}>
             <TouchableOpacity onPress={clearSelection} style={styles.selectionTopBarBtn}>
-              <X size={24} color={COLORS.text} />
+              <X size={24} color={colors.text} />
             </TouchableOpacity>
             <Text style={styles.selectionTopBarTitle}>{selectedIds.length} seleccionadas</Text>
           </View>
@@ -384,17 +388,17 @@ function GalleryEngine({ isGranted, requestPermission }: any) {
       ) : (
         <View style={[styles.filtersContainer, { paddingTop: SPACING.sm + Math.max(0, insets.top * 0.15) }]}>
           <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.filtersRow}>
-            <FilterChip label="Todo" active={mediaFilter === 'all'} onPress={() => changeMediaFilter('all')} />
-            <FilterChip label="Fotos" active={mediaFilter === 'photo'} onPress={() => changeMediaFilter('photo')} />
-            <FilterChip label="Videos" active={mediaFilter === 'video'} onPress={() => changeMediaFilter('video')} />
-            <FilterChip label="Capturas" active={mediaFilter === 'screenshot'} onPress={() => changeMediaFilter('screenshot')} />
+            <FilterChip label="Todo" active={mediaFilter === 'all'} onPress={() => changeMediaFilter('all')} colors={colors} mode={mode} />
+            <FilterChip label="Fotos" active={mediaFilter === 'photo'} onPress={() => changeMediaFilter('photo')} colors={colors} mode={mode} />
+            <FilterChip label="Videos" active={mediaFilter === 'video'} onPress={() => changeMediaFilter('video')} colors={colors} mode={mode} />
+            <FilterChip label="Capturas" active={mediaFilter === 'screenshot'} onPress={() => changeMediaFilter('screenshot')} colors={colors} mode={mode} />
           </ScrollView>
           <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={[styles.filtersRow, styles.filtersRowSecondary]}>
-            <FilterChip label="Todo el tiempo" active={dateFilter === 'all'} onPress={() => changeDateFilter('all')} />
-            <FilterChip label="Ultimo mes" active={dateFilter === 'month'} onPress={() => changeDateFilter('month')} />
-            <FilterChip label="Ultimo año" active={dateFilter === 'year'} onPress={() => changeDateFilter('year')} />
-            <FilterChip label="Recientes" active={sortOrder === 'newest'} onPress={() => changeSortOrder('newest')} />
-            <FilterChip label="Antiguas" active={sortOrder === 'oldest'} onPress={() => changeSortOrder('oldest')} />
+            <FilterChip label="Todo el tiempo" active={dateFilter === 'all'} onPress={() => changeDateFilter('all')} colors={colors} mode={mode} />
+            <FilterChip label="Ultimo mes" active={dateFilter === 'month'} onPress={() => changeDateFilter('month')} colors={colors} mode={mode} />
+            <FilterChip label="Ultimo año" active={dateFilter === 'year'} onPress={() => changeDateFilter('year')} colors={colors} mode={mode} />
+            <FilterChip label="Recientes" active={sortOrder === 'newest'} onPress={() => changeSortOrder('newest')} colors={colors} mode={mode} />
+            <FilterChip label="Antiguas" active={sortOrder === 'oldest'} onPress={() => changeSortOrder('oldest')} colors={colors} mode={mode} />
           </ScrollView>
           <View style={styles.filtersInfoRow}>
             <Text style={styles.filtersInfoText}>
@@ -420,7 +424,7 @@ function GalleryEngine({ isGranted, requestPermission }: any) {
         <View style={styles.selectionBar}>
           {bulkProcessing ? (
             <View style={styles.processingContainer}>
-              <ActivityIndicator size="small" color={COLORS.primary} style={{ marginRight: 8 }} />
+              <ActivityIndicator size="small" color={colors.primary} style={{ marginRight: 8 }} />
               <Text style={styles.processingText}>Procesando {processingCurrent} de {processingTotal}</Text>
               <View style={styles.progressBarBackground}>
                 <View style={[styles.progressBarFill, { width: `${(processingCurrent / processingTotal) * 100}%` }]} />
@@ -432,18 +436,18 @@ function GalleryEngine({ isGranted, requestPermission }: any) {
                 style={styles.selectionButton}
                 onPress={() => setShowAlbumModal(true)}
               >
-                <FolderInput size={20} color={COLORS.text} />
+                <FolderInput size={20} color={colors.text} />
                 <Text style={styles.selectionButtonText}>Album</Text>
               </TouchableOpacity>
               <TouchableOpacity
                 style={styles.selectionButton}
                 onPress={handlePrivateSelected}
               >
-                <Lock size={20} color={COLORS.text} />
+                <Lock size={20} color={colors.text} />
                 <Text style={styles.selectionButtonText}>Privar</Text>
               </TouchableOpacity>
               <TouchableOpacity style={styles.selectionButton} onPress={handleShareSelected}>
-                <Share2 size={20} color={COLORS.text} />
+                <Share2 size={20} color={colors.text} />
                 <Text style={styles.selectionButtonText}>Compartir</Text>
               </TouchableOpacity>
               <TouchableOpacity
@@ -504,9 +508,12 @@ interface FilterChipProps {
   label: string;
   active: boolean;
   onPress: () => void;
+  colors: ThemeColors;
+  mode: 'dark' | 'light';
 }
 
-function FilterChip({ label, active, onPress }: FilterChipProps) {
+function FilterChip({ label, active, onPress, colors, mode }: FilterChipProps) {
+  const styles = useMemo(() => createStyles(colors, mode), [colors, mode]);
   return (
     <TouchableOpacity onPress={onPress} style={[styles.chip, active && styles.chipActive]}>
       <Text style={[styles.chipText, active && styles.chipTextActive]}>{label}</Text>
@@ -514,10 +521,10 @@ function FilterChip({ label, active, onPress }: FilterChipProps) {
   );
 }
 
-const styles = StyleSheet.create({
+const createStyles = (colors: ThemeColors, mode: 'dark' | 'light') => StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: COLORS.background,
+    backgroundColor: colors.background,
   },
   gridContainer: {
     flex: 1,
@@ -531,9 +538,9 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     paddingHorizontal: SPACING.lg,
     paddingVertical: SPACING.md,
-    backgroundColor: COLORS.surface,
+    backgroundColor: colors.surface,
     borderBottomWidth: 1,
-    borderBottomColor: COLORS.border,
+    borderBottomColor: colors.border,
   },
   selectionTopBarLeft: {
     flexDirection: 'row',
@@ -545,7 +552,7 @@ const styles = StyleSheet.create({
   selectionTopBarTitle: {
     fontSize: 18,
     fontWeight: 'bold',
-    color: COLORS.text,
+    color: colors.text,
   },
   selectAllButton: {
     paddingHorizontal: SPACING.md,
@@ -553,7 +560,7 @@ const styles = StyleSheet.create({
   },
   selectAllText: {
     fontSize: 16,
-    color: COLORS.primary,
+    color: colors.primary,
     fontWeight: '600',
   },
   processingContainer: {
@@ -569,11 +576,11 @@ const styles = StyleSheet.create({
     left: 0,
     right: 0,
     height: 3,
-    backgroundColor: COLORS.border,
+    backgroundColor: colors.border,
   },
   progressBarFill: {
     height: 3,
-    backgroundColor: COLORS.primary,
+    backgroundColor: colors.primary,
   },
   center: {
     flex: 1,
@@ -584,39 +591,39 @@ const styles = StyleSheet.create({
   title: {
     fontSize: 24,
     fontWeight: 'bold',
-    color: COLORS.text,
+    color: colors.text,
     marginTop: SPACING.lg,
   },
   subtitle: {
     fontSize: 16,
-    color: COLORS.textMuted,
+    color: colors.textMuted,
     textAlign: 'center',
     marginTop: SPACING.md,
     marginBottom: SPACING.xl,
   },
   loadingText: {
     fontSize: 16,
-    color: COLORS.textMuted,
+    color: colors.textMuted,
     marginTop: SPACING.lg,
     fontWeight: '500',
   },
   button: {
-    backgroundColor: COLORS.primary,
+    backgroundColor: colors.primary,
     paddingHorizontal: SPACING.xl,
     paddingVertical: SPACING.md,
     borderRadius: 8,
   },
   buttonText: {
-    color: COLORS.background,
+    color: colors.background,
     fontSize: 16,
     fontWeight: '600',
   },
   filtersContainer: {
     paddingTop: SPACING.md,
     paddingBottom: SPACING.sm,
-    backgroundColor: COLORS.surface,
+    backgroundColor: colors.surface,
     borderBottomWidth: 1,
-    borderBottomColor: COLORS.border,
+    borderBottomColor: colors.border,
   },
   filtersRow: {
     paddingHorizontal: SPACING.md,
@@ -635,56 +642,56 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
   },
   filtersInfoText: {
-    color: COLORS.textMuted,
+    color: colors.textMuted,
     fontSize: 12,
     fontWeight: '600',
   },
   resetFiltersButton: {
-    backgroundColor: 'rgba(255,255,255,0.08)',
+    backgroundColor: mode === 'light' ? 'rgba(122,75,42,0.12)' : 'rgba(255,255,255,0.08)',
     borderRadius: 999,
     paddingHorizontal: 10,
     paddingVertical: 5,
   },
   resetFiltersButtonText: {
-    color: COLORS.text,
+    color: colors.text,
     fontSize: 11,
     fontWeight: '700',
   },
   chip: {
     borderRadius: 999,
     borderWidth: 1,
-    borderColor: COLORS.border,
-    backgroundColor: COLORS.surface,
+    borderColor: colors.border,
+    backgroundColor: colors.surface,
     paddingHorizontal: 13,
     paddingVertical: 9,
   },
   chipActive: {
-    borderColor: COLORS.primary,
-    backgroundColor: '#241934',
+    borderColor: colors.primary,
+    backgroundColor: mode === 'light' ? 'rgba(122,75,42,0.16)' : '#241934',
   },
   chipText: {
-    color: COLORS.textMuted,
+    color: colors.textMuted,
     fontSize: 13,
     fontWeight: '600',
   },
   chipTextActive: {
-    color: COLORS.primary,
+    color: colors.primary,
   },
   selectionBar: {
     borderBottomWidth: 1,
-    borderBottomColor: COLORS.border,
+    borderBottomColor: colors.border,
     paddingHorizontal: SPACING.md,
     paddingVertical: SPACING.sm,
-    backgroundColor: COLORS.surface,
+    backgroundColor: colors.surface,
   },
   selectionCount: {
-    color: COLORS.text,
+    color: colors.text,
     fontSize: 14,
     fontWeight: '700',
     marginBottom: 8,
   },
   processingText: {
-    color: COLORS.textMuted,
+    color: colors.textMuted,
     fontSize: 12,
     marginBottom: 8,
   },
@@ -699,16 +706,16 @@ const styles = StyleSheet.create({
     paddingHorizontal: 10,
     paddingVertical: 8,
     borderRadius: 10,
-    backgroundColor: COLORS.border,
+    backgroundColor: colors.border,
   },
   selectionDelete: {
-    backgroundColor: COLORS.error,
+    backgroundColor: colors.error,
   },
   selectionButtonDisabled: {
     opacity: 0.65,
   },
   selectionButtonText: {
-    color: COLORS.text,
+    color: colors.text,
     fontSize: 12,
     fontWeight: '600',
   },
@@ -720,29 +727,29 @@ const styles = StyleSheet.create({
     gap: SPACING.sm,
   },
   emptyTitle: {
-    color: COLORS.text,
+    color: colors.text,
     fontSize: 18,
     fontWeight: '700',
     textAlign: 'center',
   },
   emptySubtitle: {
-    color: COLORS.textMuted,
+    color: colors.textMuted,
     fontSize: 14,
     textAlign: 'center',
   },
   emptyButton: {
     marginTop: SPACING.sm,
-    backgroundColor: COLORS.primary,
+    backgroundColor: colors.primary,
     paddingHorizontal: SPACING.lg,
     paddingVertical: SPACING.sm,
     borderRadius: 999,
   },
   emptyButtonText: {
-    color: COLORS.background,
+    color: colors.background,
     fontWeight: '700',
   },
   secondaryButton: {
     marginTop: SPACING.sm,
-    backgroundColor: COLORS.border,
+    backgroundColor: colors.border,
   },
 });

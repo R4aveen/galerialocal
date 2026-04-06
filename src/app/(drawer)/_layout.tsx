@@ -1,25 +1,27 @@
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { Drawer } from 'expo-router/drawer';
-import { COLORS } from '../../constants/theme';
 import { Image, LayoutGrid, Lock, Star, Trash2 } from 'lucide-react-native';
 import CustomDrawerContent from '../../components/DrawerContent';
+import { useAppTheme } from '../../theme/AppThemeContext';
 
 export default function DrawerLayout() {
+  const { colors } = useAppTheme();
+
   return (
     <GestureHandlerRootView style={{ flex: 1 }}>
       <Drawer
         drawerContent={(props) => <CustomDrawerContent {...props} />}
         screenOptions={{
           headerStyle: {
-            backgroundColor: COLORS.surface,
+            backgroundColor: colors.surface,
           },
-          headerTintColor: COLORS.text,
+          headerTintColor: colors.text,
           drawerStyle: {
-            backgroundColor: COLORS.surface,
+            backgroundColor: colors.surface,
             width: 280,
           },
-          drawerActiveTintColor: COLORS.primary,
-          drawerInactiveTintColor: COLORS.textMuted,
+          drawerActiveTintColor: colors.primary,
+          drawerInactiveTintColor: colors.textMuted,
           headerTitleStyle: {
             fontWeight: 'bold',
           },
@@ -29,7 +31,7 @@ export default function DrawerLayout() {
           name="index"
           options={{
             drawerLabel: 'Todas las fotos',
-            title: 'GaleriaLocal',
+            title: 'galetiki',
             drawerIcon: ({ color, size }) => <Image color={color} size={size} />,
           }}
         />

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import * as FileSystem from 'expo-file-system/legacy';
 import * as MediaLibrary from 'expo-media-library';
 import { dedupeAssetsById } from '../utils/mediaAssets';
+import { bumpMediaRefresh } from '../store/useMediaRefreshStore';
 
 export type PrivateItemStatus = 'active' | 'archived' | 'trash';
 
@@ -306,6 +307,7 @@ export function usePrivateVault() {
 
       await writeIndex(sortPrivateItems(index));
       await refreshPrivate();
+      bumpMediaRefresh();
       return { hidden: copied.length, failed, movedIds: copiedIds };
     },
     [ensureVault, readIndex, refreshPrivate, writeIndex]
@@ -376,6 +378,9 @@ export function usePrivateVault() {
 
       await writeIndex(sortPrivateItems(Array.from(byId.values())));
       await refreshPrivate();
+      if (processed > 0) {
+        bumpMediaRefresh();
+      }
       return { processed, failed };
     },
     [readIndex, refreshPrivate, writeIndex]
@@ -420,6 +425,9 @@ export function usePrivateVault() {
 
       await writeIndex(sortPrivateItems(Array.from(byId.values())));
       await refreshPrivate();
+      if (processed > 0) {
+        bumpMediaRefresh();
+      }
       return { processed, failed };
     },
     [readIndex, refreshPrivate, writeIndex]
@@ -459,6 +467,9 @@ export function usePrivateVault() {
 
       await writeIndex(sortPrivateItems(Array.from(byId.values())));
       await refreshPrivate();
+      if (processed > 0) {
+        bumpMediaRefresh();
+      }
       return { processed, failed };
     },
     [readIndex, refreshPrivate, writeIndex]

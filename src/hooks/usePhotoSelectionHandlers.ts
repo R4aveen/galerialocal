@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef } from 'react';
 import * as MediaLibrary from 'expo-media-library';
 import { useSelectionStore } from '../store/useSelectionStore';
+import { getAssetIdentityKey } from '../utils/mediaAssets';
 
 interface UsePhotoSelectionHandlersParams<TAsset extends { id: string } = MediaLibrary.Asset> {
   assets: TAsset[];
@@ -20,8 +21,9 @@ export function usePhotoSelectionHandlers<TAsset extends { id: string } = MediaL
   const onPhotoPress = useCallback(
     (asset: TAsset) => {
       const { selectionMode, toggleSelection } = useSelectionStore.getState();
+      const key = getAssetIdentityKey(asset as any);
       if (selectionMode) {
-        toggleSelection(asset.id);
+        toggleSelection(key);
         return;
       }
 
@@ -33,10 +35,11 @@ export function usePhotoSelectionHandlers<TAsset extends { id: string } = MediaL
 
   const onPhotoLongPress = useCallback((asset: TAsset) => {
     const { selectionMode, setSelectionMode, toggleSelection } = useSelectionStore.getState();
+    const key = getAssetIdentityKey(asset as any);
     if (!selectionMode) {
       setSelectionMode(true);
     }
-    toggleSelection(asset.id);
+    toggleSelection(key);
   }, []);
 
   const clearSelection = useCallback(() => {

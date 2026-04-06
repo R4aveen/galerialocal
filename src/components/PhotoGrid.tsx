@@ -7,9 +7,10 @@ import { Dimensions, StyleSheet, View, ActivityIndicator, Text, RefreshControl }
 import { FlashList, type FlashListRef } from '@shopify/flash-list';
 import * as MediaLibrary from 'expo-media-library';
 import PhotoThumbnail from './PhotoThumbnail';
-import { COLORS } from '../constants/theme';
 import { getSafeAssetTimestamp } from '../utils/mediaDate';
 import { useSelectionStore } from '../store/useSelectionStore';
+import { useAppTheme } from '../theme/AppThemeContext';
+import { getAssetIdentityKey } from '../utils/mediaAssets';
 
 const COLUMNS = 4;
 const SCREEN_WIDTH = Dimensions.get('window').width;
@@ -40,6 +41,8 @@ function PhotoGrid({
   refreshing,
   onRefresh,
 }: Props) {
+  const { colors, mode } = useAppTheme();
+  const styles = useMemo(() => createStyles(colors, mode), [colors, mode]);
   const listRef = useRef<FlashListRef<GridRow> | null>(null);
   const dragSelecting = useSelectionStore(state => state.dragSelecting);
   const hideOverlayTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -108,7 +111,7 @@ function PhotoGrid({
 
       const col = Math.max(0, Math.min(COLUMNS - 1, Math.floor(contentX / ITEM_SIZE)));
       const asset = (row as any).assets?.[col] as MediaLibrary.Asset | undefined;
-      return asset?.id ?? null;
+      return asset ? getAssetIdentityKey(asset as any) : null;
     },
     [gridModel.offsetByIndex]
   );
@@ -379,6 +382,13 @@ function PhotoGrid({
     const touch = event?.nativeEvent?.touches?.[0];
     if (!touch) return;
 
+    const state = useSelectionStore.getState();
+    if (state.selectionMode) {
+      dragTouchActivatedRef.current = true;
+      beginDragSelectingAt(touch.locationX, touch.locationY);
+      return;
+    }
+
     dragTouchStartRef.current = { x: touch.locationX, y: touch.locationY };
     dragTouchActivatedRef.current = false;
     clearDragActivationTimer();
@@ -388,7 +398,7 @@ function PhotoGrid({
       if (!point) return;
       dragTouchActivatedRef.current = true;
       beginDragSelectingAt(point.x, point.y);
-    }, 1000);
+    }, 280);
   }, [beginDragSelectingAt, clearDragActivationTimer]);
 
   const handleTouchMove = useCallback((event: any) => {
@@ -403,7 +413,7 @@ function PhotoGrid({
       if (!start) return;
       const dx = x - start.x;
       const dy = y - start.y;
-      if (Math.abs(dx) > 18 || Math.abs(dy) > 18) {
+      if (Math.abs(dx) > 42 || Math.abs(dy) > 42) {
         clearDragActivationTimer();
         dragTouchStartRef.current = null;
       }
@@ -515,7 +525,7 @@ function PhotoGrid({
           ListFooterComponent={() => (
             loading ? (
               <View style={styles.footer}>
-                <ActivityIndicator color={COLORS.primary} />
+                <ActivityIndicator color={colors.primary} />
               </View>
             ) : null
           )}
@@ -598,17 +608,17 @@ function PhotoGrid({
 
 export default React.memo(PhotoGrid);
 
-const styles = StyleSheet.create({
+const createStyles = (colors: { background: string; primary: string; text: string; border: string }, mode: 'dark' | 'light') => StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: COLORS.background,
+    backgroundColor: colors.background,
   },
   footer: {
     padding: 20,
     alignItems: 'center',
   },
   sectionHeader: {
-    color: COLORS.text,
+    color: colors.text,
     fontSize: 12,
     fontWeight: '800',
     textTransform: 'capitalize',
@@ -625,9 +635,9 @@ const styles = StyleSheet.create({
   },
   skeletonCell: {
     height: ITEM_SIZE,
-    backgroundColor: 'rgba(255,255,255,0.08)',
+    backgroundColor: mode === 'light' ? 'rgba(122,75,42,0.08)' : 'rgba(255,255,255,0.08)',
     borderWidth: 0.5,
-    borderColor: 'rgba(255,255,255,0.04)',
+    borderColor: mode === 'light' ? 'rgba(122,75,42,0.12)' : 'rgba(255,255,255,0.04)',
   },
   edgeGrabZone: {
     position: 'absolute',
@@ -673,7 +683,7 @@ const styles = StyleSheet.create({
     height: 6,
     marginTop: -3,
     borderRadius: 999,
-    backgroundColor: COLORS.primary,
+    backgroundColor: colors.primary,
   },
   activeYearBadge: {
     paddingHorizontal: 7,
@@ -682,7 +692,7 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(255,255,255,0.14)',
   },
   activeYearText: {
-    color: COLORS.text,
+    color: colors.text,
     fontSize: 10,
     fontWeight: '700',
   },
@@ -696,7 +706,7 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(0,0,0,0.6)',
   },
   dateOverlayText: {
-    color: COLORS.text,
+    color: colors.text,
     fontSize: 12,
     fontWeight: '700',
     textTransform: 'capitalize',

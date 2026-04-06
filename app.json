@@ -1,8 +1,9 @@
 {
   "expo": {
-    "name": "GaleriaLocal",
+    "name": "galetiki",
     "slug": "galerialocal",
-    "version": "1.0.0",
+    "version": "1.5.1",
+    "icon": "./galeryapp.png",
     "scheme": "galerialocal",
     "orientation": "portrait",
     "userInterfaceStyle": "dark",
@@ -12,7 +13,12 @@
       "bundleIdentifier": "com.anonymous.galerialocal"
     },
     "android": {
+      "icon": "./galeryapp.png",
       "package": "com.anonymous.galerialocal",
+      "adaptiveIcon": {
+        "foregroundImage": "./galeryapp.png",
+        "backgroundColor": "#FFF4E3"
+      },
       "permissions": [
         "android.permission.READ_EXTERNAL_STORAGE",
         "android.permission.WRITE_EXTERNAL_STORAGE",

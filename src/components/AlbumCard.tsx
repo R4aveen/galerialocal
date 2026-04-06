@@ -1,8 +1,9 @@
 import React from 'react';
 import { StyleSheet, View, Text, Pressable, Dimensions } from 'react-native';
 import { Image } from 'expo-image';
-import { COLORS, SPACING } from '../constants/theme';
+import { SPACING } from '../constants/theme';
 import { AlbumWithCover } from '../hooks/useAlbums';
+import { useAppTheme } from '../theme/AppThemeContext';
 
 const SCREEN_WIDTH = Dimensions.get('window').width;
 const CARD_WIDTH = (SCREEN_WIDTH - SPACING.md * 3) / 2;
@@ -13,6 +14,9 @@ interface Props {
 }
 
 export default function AlbumCard({ album, onPress }: Props) {
+  const { colors, mode } = useAppTheme();
+  const styles = React.useMemo(() => createStyles(colors, mode), [colors, mode]);
+
   return (
     <Pressable 
       onPress={() => onPress(album)}
@@ -33,7 +37,7 @@ export default function AlbumCard({ album, onPress }: Props) {
   );
 }
 
-const styles = StyleSheet.create({
+const createStyles = (colors: { surface: string; border: string; text: string }, mode: 'dark' | 'light') => StyleSheet.create({
   container: {
     width: CARD_WIDTH,
     marginBottom: SPACING.lg,
@@ -43,16 +47,18 @@ const styles = StyleSheet.create({
     height: CARD_WIDTH,
     borderRadius: 16,
     overflow: 'hidden',
-    backgroundColor: COLORS.surface,
+    backgroundColor: colors.surface,
+    borderWidth: 1,
+    borderColor: colors.border,
   },
   image: {
     flex: 1,
   },
   placeholder: {
-    backgroundColor: COLORS.border,
+    backgroundColor: colors.border,
   },
   title: {
-    color: COLORS.text,
+    color: colors.text,
     fontSize: 14,
     fontWeight: '600',
     marginTop: SPACING.sm,
@@ -67,7 +73,7 @@ const styles = StyleSheet.create({
     borderRadius: 10,
   },
   badgeText: {
-    color: COLORS.text,
+    color: '#FFFFFF',
     fontSize: 12,
     fontWeight: 'bold',
   },

@@ -13,3 +13,7 @@ export function getGallerySession() {
 export function removeAssetFromGallerySession(assetId: string) {
   galleryAssets = galleryAssets.filter((asset) => asset.id !== assetId);
 }
+
+export function replaceAssetInGallerySession(previousId: string, nextAsset: MediaLibrary.Asset) {
+  galleryAssets = galleryAssets.map((asset) => (asset.id === previousId ? nextAsset : asset));
+}
