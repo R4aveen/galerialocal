@@ -6,14 +6,12 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Dimensions, StyleSheet, View, ActivityIndicator, Text } from 'react-native';
 import { FlashList, type FlashListRef } from '@shopify/flash-list';
 import * as MediaLibrary from 'expo-media-library';
-import { Gesture, GestureDetector } from 'react-native-gesture-handler';
-import { runOnJS } from 'react-native-reanimated';
 import PhotoThumbnail from './PhotoThumbnail';
 import { COLORS } from '../constants/theme';
 import { getSafeAssetTimestamp } from '../utils/mediaDate';
 import { useSelectionStore } from '../store/useSelectionStore';
 
-const COLUMNS = 3;
+const COLUMNS = 4;
 const SCREEN_WIDTH = Dimensions.get('window').width;
 const ITEM_SIZE = SCREEN_WIDTH / COLUMNS;
 const ROW_HEIGHT = ITEM_SIZE;
@@ -39,7 +37,15 @@ function PhotoGrid({
   loading,
 }: Props) {
   const listRef = useRef<FlashListRef<GridRow> | null>(null);
+  const dragSelecting = useSelectionStore(state => state.dragSelecting);
   const hideOverlayTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const autoScrollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const autoScrollDirRef = useRef<-1 | 0 | 1>(0);
+  const autoScrollTouchYRef = useRef<number | null>(null);
+  const containerHeightRef = useRef(0);
+  const dragActivationTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const dragTouchStartRef = useRef<{ x: number; y: number } | null>(null);
+  const dragTouchActivatedRef = useRef(false);
   const activeMonthRef = useRef<string | null>(null);
   const scrubStartYRef = useRef(0);
   const scrubActiveRef = useRef(false);
@@ -56,16 +62,12 @@ function PhotoGrid({
   const [activeMonthKey, setActiveMonthKey] = useState<string | null>(null);
   const [activeYear, setActiveYear] = useState('');
 
-  const selectionMode = useSelectionStore((state) => state.selectionMode);
-  const dragSelecting = useSelectionStore((state) => state.dragSelecting);
-  const setDragSelecting = useSelectionStore((state) => state.setDragSelecting);
-
   const scrollOffsetRef = useRef(0);
   const lastDragSelectedIdRef = useRef<string | null>(null);
 
   const skeletonRows = useMemo<GridSkeletonRow[]>(() => {
     if (!loading) return [];
-    return Array.from({ length: 6 }).map((_, idx) => ({ key: `skeleton-${idx}`, type: 'skeleton' as const }));
+    return Array.from({ length: 8 }).map((_, idx) => ({ key: `skeleton-${idx}`, type: 'skeleton' as const }));
   }, [loading]);
 
   const gridModel = useMemo(() => buildGridModel(photos, COLUMNS, ROW_HEIGHT), [photos]);
@@ -107,24 +109,81 @@ function PhotoGrid({
     [gridModel.offsetByIndex]
   );
 
-  const handleDragMove = useCallback(
-    (event: any, listRows: GridRow[]) => {
-      if (!selectionMode || !dragSelecting) return;
-      const id = hitTestAssetId(event.nativeEvent.locationX, event.nativeEvent.locationY, listRows);
-      if (!id) return;
-      if (lastDragSelectedIdRef.current === id) return;
+  const endDragSelectDelayed = useCallback(() => {
+    // Delay to avoid triggering underlying Pressable onPress when the finger is released.
+    setTimeout(() => {
+      useSelectionStore.getState().endDragSelect();
+      lastDragSelectedIdRef.current = null;
+      dragTouchActivatedRef.current = false;
+    }, 0);
+  }, []);
 
-      lastDragSelectedIdRef.current = id;
-      useSelectionStore.getState().select(id);
+  const clearDragActivationTimer = useCallback(() => {
+    if (dragActivationTimerRef.current) {
+      clearTimeout(dragActivationTimerRef.current);
+      dragActivationTimerRef.current = null;
+    }
+  }, []);
+
+  const stopAutoScroll = useCallback(() => {
+    autoScrollDirRef.current = 0;
+    autoScrollTouchYRef.current = null;
+    if (autoScrollTimerRef.current) {
+      clearInterval(autoScrollTimerRef.current);
+      autoScrollTimerRef.current = null;
+    }
+  }, []);
+
+  const startAutoScroll = useCallback((dir: -1 | 1) => {
+    if (autoScrollDirRef.current === dir && autoScrollTimerRef.current) return;
+    autoScrollDirRef.current = dir;
+    if (autoScrollTimerRef.current) {
+      clearInterval(autoScrollTimerRef.current);
+      autoScrollTimerRef.current = null;
+    }
+
+    autoScrollTimerRef.current = setInterval(() => {
+      const current = scrollOffsetRef.current;
+      const viewportHeight = containerHeightRef.current || Dimensions.get('window').height;
+      const edge = Math.min(96, Math.max(56, viewportHeight * 0.14));
+      const y = autoScrollTouchYRef.current;
+      const intensity = y == null
+        ? 0.65
+        : dir === 1
+          ? Math.max(0, Math.min(1, (y - (viewportHeight - edge)) / edge))
+          : Math.max(0, Math.min(1, ((edge - y) / edge)));
+      const speed = 6 + intensity * 26;
+      const next = Math.max(0, current + dir * speed);
+      scrollOffsetRef.current = next;
+      listRef.current?.scrollToOffset?.({ offset: next, animated: false });
+    }, 16);
+  }, []);
+
+  const updateAutoScrollAt = useCallback(
+    (y: number) => {
+      const state = useSelectionStore.getState();
+      if (!state.dragSelecting) {
+        stopAutoScroll();
+        return;
+      }
+
+      const viewportHeight = containerHeightRef.current || Dimensions.get('window').height;
+      const edge = Math.min(96, Math.max(56, viewportHeight * 0.14));
+      if (y < edge) {
+        autoScrollTouchYRef.current = y;
+        startAutoScroll(-1);
+        return;
+      }
+      if (y > viewportHeight - edge) {
+        autoScrollTouchYRef.current = y;
+        startAutoScroll(1);
+        return;
+      }
+      autoScrollTouchYRef.current = y;
+      stopAutoScroll();
     },
-    [dragSelecting, hitTestAssetId, selectionMode]
+    [startAutoScroll, stopAutoScroll]
   );
-
-  const endDragSelecting = useCallback(() => {
-    if (!dragSelecting) return;
-    setDragSelecting(false);
-    lastDragSelectedIdRef.current = null;
-  }, [dragSelecting, setDragSelecting]);
 
   const scheduleOverlayHide = useCallback(() => {
     if (hideOverlayTimerRef.current) {
@@ -136,14 +195,6 @@ function PhotoGrid({
       setRailVisible(false);
     }, 460);
   }, [isScrubbing]);
-
-  useEffect(() => {
-    return () => {
-      if (hideOverlayTimerRef.current) {
-        clearTimeout(hideOverlayTimerRef.current);
-      }
-    };
-  }, []);
 
   const alignToTopNow = useCallback(() => {
     listRef.current?.scrollToOffset?.({ offset: 0, animated: false });
@@ -304,35 +355,86 @@ function PhotoGrid({
 
   const updateDragSelectingAt = useCallback(
     (x: number, y: number) => {
+      const state = useSelectionStore.getState();
+      if (!state.dragSelecting) return;
+
+      updateAutoScrollAt(y);
+
       const rows = listRowsRef.current;
+
       const id = hitTestAssetId(x, y, rows);
       if (!id) return;
       if (lastDragSelectedIdRef.current === id) return;
       lastDragSelectedIdRef.current = id;
-      useSelectionStore.getState().applyDragSelect(id);
+      state.applyDragSelect(id);
     },
-    [hitTestAssetId]
+    [hitTestAssetId, updateAutoScrollAt]
   );
 
-  const panSelectGesture = useMemo(() => {
-    return Gesture.Pan()
-      .activateAfterLongPress(180)
-      .onBegin((event) => {
-        runOnJS(beginDragSelectingAt)(event.x, event.y);
-      })
-      .onUpdate((event) => {
-        runOnJS(updateDragSelectingAt)(event.x, event.y);
-      })
-      .onFinalize(() => {
-        runOnJS(() => {
-          useSelectionStore.getState().endDragSelect();
-        })();
-      });
-  }, [beginDragSelectingAt, endDragSelecting, updateDragSelectingAt]);
+  const handleTouchStart = useCallback((event: any) => {
+    const touch = event?.nativeEvent?.touches?.[0];
+    if (!touch) return;
+
+    dragTouchStartRef.current = { x: touch.locationX, y: touch.locationY };
+    dragTouchActivatedRef.current = false;
+    clearDragActivationTimer();
+
+    dragActivationTimerRef.current = setTimeout(() => {
+      const point = dragTouchStartRef.current;
+      if (!point) return;
+      dragTouchActivatedRef.current = true;
+      beginDragSelectingAt(point.x, point.y);
+    }, 1000);
+  }, [beginDragSelectingAt, clearDragActivationTimer]);
+
+  const handleTouchMove = useCallback((event: any) => {
+    const touch = event?.nativeEvent?.touches?.[0];
+    if (!touch) return;
+
+    const x = touch.locationX;
+    const y = touch.locationY;
+    const start = dragTouchStartRef.current;
+
+    if (!dragTouchActivatedRef.current) {
+      if (!start) return;
+      const dx = x - start.x;
+      const dy = y - start.y;
+      if (Math.abs(dx) > 18 || Math.abs(dy) > 18) {
+        clearDragActivationTimer();
+        dragTouchStartRef.current = null;
+      }
+      return;
+    }
+
+    updateDragSelectingAt(x, y);
+  }, [clearDragActivationTimer, updateDragSelectingAt]);
+
+  const finishTouchDrag = useCallback(() => {
+    clearDragActivationTimer();
+    dragTouchStartRef.current = null;
+    if (!dragTouchActivatedRef.current) return;
+    stopAutoScroll();
+    endDragSelectDelayed();
+  }, [clearDragActivationTimer, endDragSelectDelayed, stopAutoScroll]);
 
   return (
-    <GestureDetector gesture={panSelectGesture}>
-      <View style={styles.container}>
+      <View
+        style={styles.container}
+        onLayout={(e) => {
+          containerHeightRef.current = e.nativeEvent.layout.height;
+        }}
+        onTouchStart={handleTouchStart}
+        onTouchMove={handleTouchMove}
+        onTouchEnd={finishTouchDrag}
+        onTouchCancel={finishTouchDrag}
+        onMoveShouldSetResponderCapture={() => dragTouchActivatedRef.current}
+        onResponderMove={(event) => {
+          if (!dragTouchActivatedRef.current) return;
+          handleTouchMove(event);
+        }}
+        onResponderRelease={finishTouchDrag}
+        onResponderTerminate={finishTouchDrag}
+      >
         <FlashList<GridRow>
           ref={listRef}
           // Mantener una key estable evita desmontar/remontar toda la lista
@@ -388,6 +490,7 @@ function PhotoGrid({
           onEndReached={onLoadMore}
           onEndReachedThreshold={4}
           removeClippedSubviews={false}
+          scrollEnabled={!dragSelecting}
           scrollEventThrottle={16}
           onScroll={(event) => {
             scrollOffsetRef.current = event.nativeEvent.contentOffset.y;
@@ -484,7 +587,6 @@ function PhotoGrid({
           </View>
         ) : null}
       </View>
-    </GestureDetector>
   );
 
 }

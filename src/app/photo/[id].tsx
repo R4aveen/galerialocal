@@ -104,7 +104,9 @@ export default function PhotoDetailScreen() {
   const uri = currentAsset.uri;
   const filename = currentAsset.filename || `IMG_${id}.jpg`;
   const isVideo = currentAsset.mediaType === 'video';
-  const isPrivateSource = params.source === 'private';
+  const isPrivateSource =
+    params.source === 'private' || params.source === 'private-archived' || params.source === 'private-trash';
+  const isPrivateTrashSource = params.source === 'private-trash';
 
   const scale = useSharedValue(1);
   const savedScale = useSharedValue(1);
@@ -451,7 +453,9 @@ export default function PhotoDetailScreen() {
 
   const confirmDelete = async () => {
     setShowConfirm(false);
-    const success = isPrivateSource ? await deletePrivateById(id) : await moveToTrash(currentAsset);
+    const success = isPrivateSource
+      ? await deletePrivateById(id, isPrivateTrashSource)
+      : await moveToTrash(currentAsset);
     if (success) {
       removeAssetFromGallerySession(id);
       if (galleryAssets.length <= 1) {
@@ -730,10 +734,12 @@ export default function PhotoDetailScreen() {
         visible={showConfirm}
         onClose={() => setShowConfirm(false)}
         onConfirm={confirmDelete}
-        title={isPrivateSource ? 'Eliminar de privadas' : 'Mover a la papelera'}
+        title={isPrivateSource ? (isPrivateTrashSource ? 'Eliminar de privadas' : 'Mover a papelera privada') : 'Mover a la papelera'}
         message={
           isPrivateSource
-            ? 'Se eliminara del vault privado.'
+            ? isPrivateTrashSource
+              ? 'Se eliminara del vault privado de forma permanente.'
+              : 'Se movera a la papelera privada.'
             : 'La foto se podra recuperar desde la papelera durante los proximos 30 dias.'
         }
       />

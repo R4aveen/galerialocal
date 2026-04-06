@@ -4,9 +4,9 @@ import * as MediaLibrary from 'expo-media-library';
 import * as FileSystem from 'expo-file-system/legacy';
 import { useRouter } from 'expo-router';
 import { useFocusEffect } from '@react-navigation/native';
-import { FolderInput, Lock, RotateCcw, Share2, Trash2, X, Settings } from 'lucide-react-native';
+import { Archive, FolderInput, Lock, RotateCcw, Share2, Trash2, X, Settings } from 'lucide-react-native';
 import { COLORS, SPACING } from '../../constants/theme';
-import { PrivateItem, usePrivateVault } from '../../hooks/usePrivateVault';
+import { usePrivateVault } from '../../hooks/usePrivateVault';
 import { useAlbumManager } from '../../hooks/useAlbumManager';
 import { usePermissions } from '../../hooks/usePermissions';
 import { usePrivateLockV2 } from '../../hooks/usePrivateLockV2';
@@ -17,12 +17,26 @@ import PhotoGrid from '../../components/PhotoGrid';
 import AlbumManagerModal from '../../components/AlbumManagerModal';
 import { usePhotoSelectionHandlers } from '../../hooks/usePhotoSelectionHandlers';
 
+type PrivateTab = 'active' | 'archived' | 'trash';
+
 export default function PrivateScreen() {
   const router = useRouter();
   const { isGranted } = usePermissions();
-  const { privateItems, restoreManyFromPrivate, deleteManyPrivate, refreshPrivate, hideInPrivate } = usePrivateVault();
-  const { hasPin, unlocked, setPin, unlockWithPin, changePin, clearPin, lock, loading: lockLoading } = usePrivateLockV2();
-  const { albums, loading: loadingAlbums, moveAssetsToAlbum, createAlbumFromAssets } = useAlbumManager(Boolean(isGranted));
+  const {
+    privateItems,
+    archivedPrivateItems,
+    trashedPrivateItems,
+    restoreManyFromPrivate,
+    archiveManyPrivate,
+    restoreManyArchivedToPrivate,
+    moveManyPrivateToTrash,
+    restoreManyPrivateFromTrash,
+    deleteManyPrivate,
+    refreshPrivate,
+    hideInPrivate,
+  } = usePrivateVault();
+  const { hasPin, unlocked, setPin, unlockWithPin, changePin } = usePrivateLockV2();
+  const { albums, loading: loadingAlbums, createAlbumFromAssets } = useAlbumManager(Boolean(isGranted));
 
   const selectionMode = useSelectionStore(state => state.selectionMode);
   const selectedIdsSet = useSelectionStore(state => state.selectedIds);
@@ -37,7 +51,8 @@ export default function PrivateScreen() {
   const [newPinInput, setNewPinInput] = useState('');
   const [confirmPinInput, setConfirmPinInput] = useState('');
   const [autoCapturedCount, setAutoCapturedCount] = useState(0);
-  
+  const [activeTab, setActiveTab] = useState<PrivateTab>('active');
+
   // Change PIN modal states
   const [showChangePinModal, setShowChangePinModal] = useState(false);
   const [currentPinInput, setCurrentPinInput] = useState('');
@@ -63,7 +78,6 @@ export default function PrivateScreen() {
   useFocusEffect(
     React.useCallback(() => {
       refreshPrivate();
-      lock();
     }, [refreshPrivate])
   );
 
@@ -129,9 +143,15 @@ export default function PrivateScreen() {
     };
   }, [hideInPrivate, isGranted, unlocked]);
 
+  const visiblePrivateItems = useMemo(() => {
+    if (activeTab === 'archived') return archivedPrivateItems;
+    if (activeTab === 'trash') return trashedPrivateItems;
+    return privateItems;
+  }, [activeTab, archivedPrivateItems, privateItems, trashedPrivateItems]);
+
   const privateAssets = useMemo(
     () =>
-      privateItems.map(
+      visiblePrivateItems.map(
         (item) =>
           ({
             id: item.id,
@@ -141,12 +161,12 @@ export default function PrivateScreen() {
             creationTime: item.hiddenAt,
           }) as MediaLibrary.Asset
       ),
-    [privateItems]
+    [visiblePrivateItems]
   );
 
   const selectedPrivateItems = useMemo(
-    () => privateItems.filter((item) => selectedIds.includes(item.id)),
-    [privateItems, selectedIds]
+    () => visiblePrivateItems.filter((item) => selectedIds.includes(item.id)),
+    [visiblePrivateItems, selectedIds]
   );
 
   const clearSelection = () => {
@@ -159,6 +179,7 @@ export default function PrivateScreen() {
     if (selectedPrivateItems.length === 0) return;
 
     try {
+      clearSelection();
       setProcessing(true);
 
       if (selectedPrivateItems.length > 1) {
@@ -227,22 +248,29 @@ export default function PrivateScreen() {
   const handleDeleteSelected = () => {
     if (selectedPrivateItems.length === 0 || processing) return;
 
-    Alert.alert('Eliminar privado', 'Se eliminaran los elementos seleccionados del vault privado.', [
+    const isTrashTab = activeTab === 'trash';
+    Alert.alert(
+      isTrashTab ? 'Eliminar permanentemente' : 'Mover a papelera privada',
+      isTrashTab
+        ? 'Se eliminaran los elementos seleccionados del vault privado de forma permanente.'
+        : 'Los elementos seleccionados se moveran a la papelera privada.',
+      [
       { text: 'Cancelar', style: 'cancel' },
       {
-        text: 'Eliminar',
+        text: isTrashTab ? 'Eliminar' : 'Mover',
         style: 'destructive',
         onPress: async () => {
           try {
+            clearSelection();
             setProcessing(true);
             setProcessingTotal(selectedPrivateItems.length);
-            const { failed } = await deleteManyPrivate(selectedPrivateItems, (processed, total) => {
+            const action = isTrashTab ? deleteManyPrivate : moveManyPrivateToTrash;
+            const { failed } = await action(selectedPrivateItems, (processed, total) => {
               setProcessingCurrent(processed);
               setProcessingTotal(total);
             });
-            clearSelection();
             if (failed > 0) {
-              Alert.alert('Atencion', `${failed} elementos no se pudieron eliminar.`);
+              Alert.alert('Atencion', `${failed} elementos no se pudieron procesar.`);
             }
           } finally {
             setProcessing(false);
@@ -256,14 +284,57 @@ export default function PrivateScreen() {
     if (selectedPrivateItems.length === 0 || processing) return;
 
     try {
+      clearSelection();
       setProcessing(true);
       setProcessingTotal(selectedPrivateItems.length);
-      const { failed } = await restoreManyFromPrivate(selectedPrivateItems, albumId, (processed, total) => {
+      const { failed } = activeTab === 'trash'
+        ? await restoreManyPrivateFromTrash(selectedPrivateItems, (processed, total) => {
+            setProcessingCurrent(processed);
+            setProcessingTotal(total);
+          })
+        : await restoreManyFromPrivate(selectedPrivateItems, albumId, (processed, total) => {
+            setProcessingCurrent(processed);
+            setProcessingTotal(total);
+          });
+      setShowAlbumModal(false);
+      if (failed > 0) {
+        Alert.alert('Atencion', `${failed} elementos no se pudieron restaurar.`);
+      }
+    } finally {
+      setProcessing(false);
+    }
+  };
+
+  const handleArchiveSelected = async () => {
+    if (selectedPrivateItems.length === 0 || processing) return;
+
+    try {
+      clearSelection();
+      setProcessing(true);
+      setProcessingTotal(selectedPrivateItems.length);
+      const { failed } = await archiveManyPrivate(selectedPrivateItems, (processed, total) => {
         setProcessingCurrent(processed);
         setProcessingTotal(total);
       });
+      if (failed > 0) {
+        Alert.alert('Atencion', `${failed} elementos no se pudieron archivar.`);
+      }
+    } finally {
+      setProcessing(false);
+    }
+  };
+
+  const handleRestoreArchivedSelected = async () => {
+    if (selectedPrivateItems.length === 0 || processing) return;
+
+    try {
       clearSelection();
-      setShowAlbumModal(false);
+      setProcessing(true);
+      setProcessingTotal(selectedPrivateItems.length);
+      const { failed } = await restoreManyArchivedToPrivate(selectedPrivateItems, (processed, total) => {
+        setProcessingCurrent(processed);
+        setProcessingTotal(total);
+      });
       if (failed > 0) {
         Alert.alert('Atencion', `${failed} elementos no se pudieron restaurar.`);
       }
@@ -283,7 +354,7 @@ export default function PrivateScreen() {
           uri: (asset as any).uri,
           filename: (asset as any).filename,
           index: String(assetIndex < 0 ? 0 : assetIndex),
-          source: 'private',
+          source: activeTab === 'trash' ? 'private-trash' : activeTab === 'archived' ? 'private-archived' : 'private',
         },
       });
     },
@@ -418,12 +489,42 @@ export default function PrivateScreen() {
     );
   }
 
-  if (privateItems.length === 0) {
+  if (visiblePrivateItems.length === 0) {
     return (
-      <View style={styles.center}>
-        <Lock size={52} color={COLORS.textMuted} />
-        <Text style={styles.title}>No hay archivos privados</Text>
-        <Text style={styles.subtitle}>Mantén pulsado en galeria para enviar fotos al vault privado.</Text>
+      <View style={styles.container}>
+        <View style={styles.header}>
+          <Text style={styles.headerTitle}>Privadas</Text>
+          <TouchableOpacity
+            style={styles.headerButton}
+            onPress={() => setShowChangePinModal(true)}
+          >
+            <Settings size={20} color={COLORS.text} />
+          </TouchableOpacity>
+        </View>
+        <View style={styles.tabsRow}>
+          <TouchableOpacity style={[styles.tabButton, activeTab === 'active' && styles.tabButtonActive]} onPress={() => setActiveTab('active')}>
+            <Text style={[styles.tabButtonText, activeTab === 'active' && styles.tabButtonTextActive]}>Privadas</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={[styles.tabButton, activeTab === 'archived' && styles.tabButtonActive]} onPress={() => setActiveTab('archived')}>
+            <Text style={[styles.tabButtonText, activeTab === 'archived' && styles.tabButtonTextActive]}>Archivadas</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={[styles.tabButton, activeTab === 'trash' && styles.tabButtonActive]} onPress={() => setActiveTab('trash')}>
+            <Text style={[styles.tabButtonText, activeTab === 'trash' && styles.tabButtonTextActive]}>Papelera</Text>
+          </TouchableOpacity>
+        </View>
+        <View style={styles.center}>
+          <Lock size={52} color={COLORS.textMuted} />
+          <Text style={styles.title}>
+            {activeTab === 'trash' ? 'Papelera privada vacia' : activeTab === 'archived' ? 'No hay archivos archivados' : 'No hay archivos privados'}
+          </Text>
+          <Text style={styles.subtitle}>
+            {activeTab === 'trash'
+              ? 'Los archivos eliminados de privadas apareceran aqui.'
+              : activeTab === 'archived'
+                ? 'Archiva fotos privadas para ocultarlas sin sacarlas del vault.'
+                : 'Mantén pulsado en galeria para enviar fotos al vault privado.'}
+          </Text>
+        </View>
       </View>
     );
   }
@@ -447,6 +548,18 @@ export default function PrivateScreen() {
         </View>
       ) : null}
 
+      <View style={styles.tabsRow}>
+        <TouchableOpacity style={[styles.tabButton, activeTab === 'active' && styles.tabButtonActive]} onPress={() => setActiveTab('active')}>
+          <Text style={[styles.tabButtonText, activeTab === 'active' && styles.tabButtonTextActive]}>Privadas ({privateItems.length})</Text>
+        </TouchableOpacity>
+        <TouchableOpacity style={[styles.tabButton, activeTab === 'archived' && styles.tabButtonActive]} onPress={() => setActiveTab('archived')}>
+          <Text style={[styles.tabButtonText, activeTab === 'archived' && styles.tabButtonTextActive]}>Archivadas ({archivedPrivateItems.length})</Text>
+        </TouchableOpacity>
+        <TouchableOpacity style={[styles.tabButton, activeTab === 'trash' && styles.tabButtonActive]} onPress={() => setActiveTab('trash')}>
+          <Text style={[styles.tabButtonText, activeTab === 'trash' && styles.tabButtonTextActive]}>Papelera ({trashedPrivateItems.length})</Text>
+        </TouchableOpacity>
+      </View>
+
       {selectionMode ? (
         <View style={styles.selectionBar}>
           <Text style={styles.selectionCount}>{selectedIds.length} seleccionadas</Text>
@@ -454,21 +567,37 @@ export default function PrivateScreen() {
             <Text style={styles.processingText}>Procesando {processingCurrent}/{processingTotal}</Text>
           ) : null}
           <View style={styles.selectionActions}>
-            <TouchableOpacity style={styles.selectionButton} onPress={handleShareSelected} disabled={processing}>
-              <Share2 size={18} color={COLORS.text} />
-              <Text style={styles.selectionButtonText}>Compartir</Text>
-            </TouchableOpacity>
-            <TouchableOpacity style={styles.selectionButton} onPress={() => setShowAlbumModal(true)} disabled={processing}>
-              <FolderInput size={18} color={COLORS.text} />
-              <Text style={styles.selectionButtonText}>Album</Text>
-            </TouchableOpacity>
+            {activeTab !== 'trash' ? (
+              <TouchableOpacity style={styles.selectionButton} onPress={handleShareSelected} disabled={processing}>
+                <Share2 size={18} color={COLORS.text} />
+                <Text style={styles.selectionButtonText}>Compartir</Text>
+              </TouchableOpacity>
+            ) : null}
+            {activeTab === 'active' ? (
+              <TouchableOpacity style={styles.selectionButton} onPress={handleArchiveSelected} disabled={processing}>
+                <Archive size={18} color={COLORS.text} />
+                <Text style={styles.selectionButtonText}>Archivar</Text>
+              </TouchableOpacity>
+            ) : null}
+            {activeTab !== 'trash' ? (
+              <TouchableOpacity style={styles.selectionButton} onPress={() => setShowAlbumModal(true)} disabled={processing}>
+                <FolderInput size={18} color={COLORS.text} />
+                <Text style={styles.selectionButtonText}>Album</Text>
+              </TouchableOpacity>
+            ) : null}
+            {activeTab === 'archived' ? (
+              <TouchableOpacity style={styles.selectionButton} onPress={handleRestoreArchivedSelected} disabled={processing}>
+                <RotateCcw size={18} color={COLORS.text} />
+                <Text style={styles.selectionButtonText}>Desarchivar</Text>
+              </TouchableOpacity>
+            ) : null}
             <TouchableOpacity style={styles.selectionButton} onPress={() => handleRestoreSelected()} disabled={processing}>
               <RotateCcw size={18} color={COLORS.text} />
-              <Text style={styles.selectionButtonText}>{processing ? 'Procesando...' : 'Restaurar'}</Text>
+              <Text style={styles.selectionButtonText}>{activeTab === 'trash' ? 'Restaurar' : 'Sacar'}</Text>
             </TouchableOpacity>
             <TouchableOpacity style={[styles.selectionButton, styles.selectionDelete]} onPress={handleDeleteSelected} disabled={processing}>
               <Trash2 size={18} color={COLORS.text} />
-              <Text style={styles.selectionButtonText}>{processing ? 'Procesando...' : 'Eliminar'}</Text>
+              <Text style={styles.selectionButtonText}>{activeTab === 'trash' ? 'Eliminar' : 'Papelera'}</Text>
             </TouchableOpacity>
             <TouchableOpacity style={styles.selectionButton} onPress={clearSelection} disabled={processing}>
               <X size={18} color={COLORS.text} />
@@ -619,6 +748,35 @@ const styles = StyleSheet.create({
     paddingHorizontal: SPACING.md,
     paddingVertical: SPACING.sm,
     backgroundColor: COLORS.surface,
+  },
+  tabsRow: {
+    flexDirection: 'row',
+    gap: SPACING.sm,
+    paddingHorizontal: SPACING.md,
+    paddingVertical: SPACING.sm,
+    backgroundColor: COLORS.surface,
+    borderBottomWidth: 1,
+    borderBottomColor: COLORS.border,
+  },
+  tabButton: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 10,
+    paddingHorizontal: 8,
+    borderRadius: 10,
+    backgroundColor: COLORS.border,
+  },
+  tabButtonActive: {
+    backgroundColor: COLORS.primary,
+  },
+  tabButtonText: {
+    color: COLORS.text,
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  tabButtonTextActive: {
+    color: COLORS.background,
   },
   autoCaptureBanner: {
     marginHorizontal: SPACING.md,

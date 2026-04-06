@@ -2,12 +2,17 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import * as FileSystem from 'expo-file-system/legacy';
 import * as MediaLibrary from 'expo-media-library';
 
+export type PrivateItemStatus = 'active' | 'archived' | 'trash';
+
 export interface PrivateItem {
   id: string;
   filename: string;
   uri: string;
   originalPath: string;
   hiddenAt: number;
+  status?: PrivateItemStatus;
+  archivedAt?: number | null;
+  trashedAt?: number | null;
 }
 
 interface HideManyResult {
@@ -34,10 +39,24 @@ const NO_MEDIA = `${VAULT_DIR}.nomedia`;
 const toMs = (unixTimestamp: number) =>
   unixTimestamp > 1_000_000_000_000 ? unixTimestamp : unixTimestamp * 1000;
 
+const normalizePrivateItem = (item: PrivateItem): PrivateItem => ({
+  ...item,
+  status: item.status ?? 'active',
+  archivedAt: item.archivedAt ?? null,
+  trashedAt: item.trashedAt ?? null,
+});
+
+const sortPrivateItems = (entries: PrivateItem[]) =>
+  [...entries].sort((a, b) => {
+    const scoreA = a.status === 'trash' ? (a.trashedAt ?? a.hiddenAt) : a.status === 'archived' ? (a.archivedAt ?? a.hiddenAt) : a.hiddenAt;
+    const scoreB = b.status === 'trash' ? (b.trashedAt ?? b.hiddenAt) : b.status === 'archived' ? (b.archivedAt ?? b.hiddenAt) : b.hiddenAt;
+    return scoreB - scoreA;
+  });
+
 const safeParseArray = (value: string): PrivateItem[] => {
   try {
     const parsed = JSON.parse(value);
-    return Array.isArray(parsed) ? (parsed as PrivateItem[]) : [];
+    return Array.isArray(parsed) ? (parsed as PrivateItem[]).map(normalizePrivateItem) : [];
   } catch {
     return [];
   }
@@ -141,6 +160,9 @@ export function usePrivateVault() {
           uri: dest,
           originalPath: source,
           hiddenAt: toMs(asset.creationTime || Date.now()),
+          status: 'active',
+          archivedAt: null,
+          trashedAt: null,
         });
 
         try {
@@ -153,8 +175,7 @@ export function usePrivateVault() {
       }
     }
 
-    next.sort((a, b) => b.hiddenAt - a.hiddenAt);
-    await writeIndex(next);
+    await writeIndex(sortPrivateItems(next));
   }, [getAlbumAssets, getPrivateAlbum, readIndex, writeIndex]);
 
   const refreshPrivate = useCallback(async () => {
@@ -167,8 +188,7 @@ export function usePrivateVault() {
       }
 
       const indexed = await readIndex();
-      indexed.sort((a, b) => b.hiddenAt - a.hiddenAt);
-      setItems(indexed);
+      setItems(sortPrivateItems(indexed));
 
       // Validate missing files in background so first render is not blocked.
       if (!validatingRef.current) {
@@ -184,9 +204,9 @@ export function usePrivateVault() {
             }
 
             if (valid.length !== indexed.length) {
-              valid.sort((a, b) => b.hiddenAt - a.hiddenAt);
-              await writeIndex(valid);
-              setItems(valid);
+              const sortedValid = sortPrivateItems(valid);
+              await writeIndex(sortedValid);
+              setItems(sortedValid);
             }
           } catch {
             // Ignore background validation errors.
@@ -248,6 +268,9 @@ export function usePrivateVault() {
               uri: dest,
               originalPath: source,
               hiddenAt: toMs(asset.creationTime || Date.now()),
+              status: 'active',
+              archivedAt: null,
+              trashedAt: null,
             },
           });
           onProgress?.(copied.length + failed, assets.length);
@@ -280,8 +303,7 @@ export function usePrivateVault() {
         index.push(item.entry);
       }
 
-      index.sort((a, b) => b.hiddenAt - a.hiddenAt);
-      await writeIndex(index);
+      await writeIndex(sortPrivateItems(index));
       await refreshPrivate();
       return { hidden: copied.length, failed, movedIds: copiedIds };
     },
@@ -313,7 +335,7 @@ export function usePrivateVault() {
 
       for (const item of privateItems) {
         const existing = byId.get(item.id);
-        if (!existing) {
+        if (!existing || existing.status === 'trash') {
           failed += 1;
           onProgress?.(processed + failed, privateItems.length);
           continue;
@@ -351,7 +373,7 @@ export function usePrivateVault() {
         }
       }
 
-      await writeIndex(Array.from(byId.values()));
+      await writeIndex(sortPrivateItems(Array.from(byId.values())));
       await refreshPrivate();
       return { processed, failed };
     },
@@ -395,39 +417,116 @@ export function usePrivateVault() {
         onProgress?.(processed + failed, privateItems.length);
       }
 
-      await writeIndex(Array.from(byId.values()));
+      await writeIndex(sortPrivateItems(Array.from(byId.values())));
       await refreshPrivate();
       return { processed, failed };
     },
     [readIndex, refreshPrivate, writeIndex]
   );
 
-  const deletePrivate = useCallback(
-    async (item: PrivateItem) => {
-      const result = await deleteManyPrivate([item]);
-      return result.processed === 1;
+  const updateStatusMany = useCallback(
+    async (
+      privateItems: PrivateItem[],
+      status: PrivateItemStatus,
+      onProgress?: ProgressCallback
+    ): Promise<PrivateBatchResult> => {
+      if (privateItems.length === 0) return { processed: 0, failed: 0 };
+
+      const current = await readIndex();
+      const byId = new Map(current.map((item) => [item.id, item]));
+      let processed = 0;
+      let failed = 0;
+      const now = Date.now();
+
+      for (const item of privateItems) {
+        const existing = byId.get(item.id);
+        if (!existing) {
+          failed += 1;
+          onProgress?.(processed + failed, privateItems.length);
+          continue;
+        }
+
+        byId.set(item.id, {
+          ...existing,
+          status,
+          archivedAt: status === 'archived' ? now : status === 'trash' ? existing.archivedAt ?? null : null,
+          trashedAt: status === 'trash' ? now : null,
+        });
+        processed += 1;
+        onProgress?.(processed + failed, privateItems.length);
+      }
+
+      await writeIndex(sortPrivateItems(Array.from(byId.values())));
+      await refreshPrivate();
+      return { processed, failed };
     },
-    [deleteManyPrivate]
+    [readIndex, refreshPrivate, writeIndex]
+  );
+
+  const archiveManyPrivate = useCallback(
+    async (privateItems: PrivateItem[], onProgress?: ProgressCallback) => updateStatusMany(privateItems, 'archived', onProgress),
+    [updateStatusMany]
+  );
+
+  const restoreManyArchivedToPrivate = useCallback(
+    async (privateItems: PrivateItem[], onProgress?: ProgressCallback) => updateStatusMany(privateItems, 'active', onProgress),
+    [updateStatusMany]
+  );
+
+  const moveManyPrivateToTrash = useCallback(
+    async (privateItems: PrivateItem[], onProgress?: ProgressCallback) => updateStatusMany(privateItems, 'trash', onProgress),
+    [updateStatusMany]
+  );
+
+  const restoreManyPrivateFromTrash = useCallback(
+    async (privateItems: PrivateItem[], onProgress?: ProgressCallback) => updateStatusMany(privateItems, 'active', onProgress),
+    [updateStatusMany]
   );
 
   const deletePrivateById = useCallback(
-    async (id: string) => {
+    async (id: string, permanently = false) => {
       const item = items.find((entry) => entry.id === id);
       if (!item) return false;
-      return deletePrivate(item);
+      if (permanently || item.status === 'trash') {
+        const result = await deleteManyPrivate([item]);
+        return result.processed === 1;
+      }
+      const result = await moveManyPrivateToTrash([item]);
+      return result.processed === 1;
     },
-    [deletePrivate, items]
+    [deleteManyPrivate, items, moveManyPrivateToTrash]
   );
 
-  const getPrivateIds = useCallback(() => items.map((item) => item.id), [items]);
+  const deletePrivate = useCallback(
+    async (item: PrivateItem, permanently = false) => {
+      const result = permanently || item.status === 'trash'
+        ? await deleteManyPrivate([item])
+        : await moveManyPrivateToTrash([item]);
+      return result.processed === 1;
+    },
+    [deleteManyPrivate, moveManyPrivateToTrash]
+  );
+
+  const activePrivateItems = items.filter((item) => item.status !== 'archived' && item.status !== 'trash');
+  const archivedPrivateItems = items.filter((item) => item.status === 'archived');
+  const trashedPrivateItems = items.filter((item) => item.status === 'trash');
+
+  const getPrivateIds = useCallback(() => activePrivateItems.map((item) => item.id), [activePrivateItems]);
 
   return {
-    privateItems: items,
+    privateItems: activePrivateItems,
+    allPrivateItems: items,
+    archivedPrivateItems,
+    trashedPrivateItems,
     loading,
     hideInPrivate,
     hideManyInPrivate,
     restoreFromPrivate,
     restoreManyFromPrivate,
+    archiveManyPrivate,
+    restoreManyArchivedToPrivate,
+    moveManyPrivateToTrash,
+    restoreManyPrivateFromTrash,
     deletePrivate,
     deleteManyPrivate,
     deletePrivateById,

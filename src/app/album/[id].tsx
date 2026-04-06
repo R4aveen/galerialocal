@@ -4,6 +4,7 @@ import * as MediaLibrary from 'expo-media-library';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { ArrowLeft, CameraOff, FolderInput, Lock, Share2, Trash2, X } from 'lucide-react-native';
 import { useFocusEffect } from '@react-navigation/native';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import PhotoGrid from '../../components/PhotoGrid';
 import AlbumManagerModal from '../../components/AlbumManagerModal';
@@ -23,6 +24,7 @@ export default function AlbumDetailScreen() {
   const albumId = params.id;
   const albumTitle = params.title || 'Album';
   const router = useRouter();
+  const insets = useSafeAreaInsets();
   const { isGranted, isLimited, requestPermission, isUnsupportedExpoGo, checkPermissions } = usePermissions();
   const { getTrashIds, refreshTrash, moveManyToTrash } = useTrash();
   const { getPrivateIds, refreshPrivate, hideManyInPrivate } = usePrivateVault();
@@ -159,6 +161,7 @@ export default function AlbumDetailScreen() {
   const handleShareSelected = async () => {
     if (selectedAssets.length === 0) return;
     try {
+      clearSelection();
       if (selectedAssets.length > 1) {
         Alert.alert('Compartir', 'Por ahora se comparte un archivo a la vez. Se abrira el primero seleccionado.');
       }
@@ -184,6 +187,7 @@ export default function AlbumDetailScreen() {
           style: 'destructive',
           onPress: async () => {
             try {
+              clearSelection();
               setBulkProcessing(true);
               setProcessingTotal(selectedAssets.length);
               const { failed, movedIds } = await moveManyToTrash(selectedAssets, (processed, total) => {
@@ -211,6 +215,7 @@ export default function AlbumDetailScreen() {
     if (selectedAssets.length === 0 || bulkProcessing) return;
 
     try {
+      clearSelection();
       setBulkProcessing(true);
       setProcessingTotal(selectedAssets.length);
       const { failed, movedIds } = await moveAssetsToAlbum(
@@ -242,6 +247,7 @@ export default function AlbumDetailScreen() {
     if (selectedAssets.length === 0 || bulkProcessing) return;
 
     try {
+      clearSelection();
       setBulkProcessing(true);
       setProcessingTotal(selectedAssets.length);
       const result = await createAlbumFromAssets(name, selectedAssets, 'move', (processed, total) => {
@@ -342,8 +348,8 @@ export default function AlbumDetailScreen() {
   }
 
   return (
-    <View style={styles.container}>
-      <View style={styles.header}>
+    <SafeAreaView style={styles.container} edges={['top']}>
+      <View style={[styles.header, { paddingTop: insets.top, height: 56 + insets.top }]}>
         <TouchableOpacity onPress={() => router.back()} style={styles.backButton}>
           <ArrowLeft color={COLORS.text} size={20} />
         </TouchableOpacity>
@@ -404,7 +410,7 @@ export default function AlbumDetailScreen() {
         onMoveToAlbum={handleMoveToAlbum}
         onCreateAlbum={handleCreateAlbum}
       />
-    </View>
+    </SafeAreaView>
   );
 }
 

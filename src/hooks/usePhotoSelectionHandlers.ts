@@ -32,11 +32,11 @@ export function usePhotoSelectionHandlers<TAsset extends { id: string } = MediaL
   );
 
   const onPhotoLongPress = useCallback((asset: TAsset) => {
-    const { selectionMode, setSelectionMode, beginDragSelect } = useSelectionStore.getState();
+    const { selectionMode, setSelectionMode, toggleSelection } = useSelectionStore.getState();
     if (!selectionMode) {
       setSelectionMode(true);
     }
-    beginDragSelect(asset.id);
+    toggleSelection(asset.id);
   }, []);
 
   const clearSelection = useCallback(() => {

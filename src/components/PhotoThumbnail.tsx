@@ -16,11 +16,12 @@ function PhotoThumbnail({ asset, size, onPress, onLongPress }: Props) {
   // su propio estado de selección cambia o si el modo selección se apaga/enciende globalmente.
   const isSelected = useSelectionStore(state => state.selectedIds.has(asset.id));
   const selectionMode = useSelectionStore(state => state.selectionMode);
+  const dragSelecting = useSelectionStore(state => state.dragSelecting);
 
   return (
     <Pressable 
-      onPress={() => onPress(asset)}
-      onLongPress={onLongPress ? () => onLongPress(asset) : undefined}
+      onPress={dragSelecting ? undefined : () => onPress(asset)}
+      onLongPress={dragSelecting || !onLongPress ? undefined : () => onLongPress(asset)}
       style={({ pressed }) => [
         styles.container, 
         { width: size, height: size },

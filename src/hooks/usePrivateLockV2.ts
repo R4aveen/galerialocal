@@ -7,9 +7,11 @@ import {
   changePrivatePin,
 } from '../db/privateLockManager';
 
+let sharedUnlocked = false;
+
 export function usePrivateLockV2() {
   const [hasPin, setHasPin] = useState(false);
-  const [unlocked, setUnlocked] = useState(false);
+  const [unlocked, setUnlocked] = useState(sharedUnlocked);
   const [loading, setLoading] = useState(false);
 
   // Check if PIN is set on mount
@@ -19,7 +21,7 @@ export function usePrivateLockV2() {
       try {
         const exists = await hasPrivatePin();
         setHasPin(exists);
-        setUnlocked(false);
+        setUnlocked(exists ? sharedUnlocked : false);
       } catch (error) {
         console.error('Error checking PIN:', error);
       } finally {
@@ -36,6 +38,7 @@ export function usePrivateLockV2() {
       const success = await setPrivatePin(pin);
       if (success) {
         setHasPin(true);
+        sharedUnlocked = true;
         setUnlocked(true);
       }
       return success;
@@ -49,6 +52,7 @@ export function usePrivateLockV2() {
       setLoading(true);
       const isValid = await verifyPrivatePin(pin);
       if (isValid) {
+        sharedUnlocked = true;
         setUnlocked(true);
       }
       return isValid;
@@ -72,6 +76,7 @@ export function usePrivateLockV2() {
       setLoading(true);
       const success = await clearPrivatePin();
       if (success) {
+        sharedUnlocked = false;
         setHasPin(false);
         setUnlocked(false);
       }
@@ -82,6 +87,7 @@ export function usePrivateLockV2() {
   }, []);
 
   const lock = useCallback((): void => {
+    sharedUnlocked = false;
     setUnlocked(false);
   }, []);
 

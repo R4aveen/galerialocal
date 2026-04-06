@@ -1,5 +1,19 @@
-import React, { useEffect, useMemo, useState, useCallback, useRef } from 'react';
-import { Alert, AppState, Share, StyleSheet, View, Text, TouchableOpacity, ActivityIndicator, ScrollView, InteractionManager, Linking } from 'react-native';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  ActivityIndicator,
+  Alert,
+  AppState,
+  Share,
+  Linking,
+  StyleSheet,
+  View,
+  Text,
+  TouchableOpacity,
+  ScrollView,
+  InteractionManager,
+  SafeAreaView,
+} from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useFocusEffect } from '@react-navigation/native';
 import { usePermissions } from '../../hooks/usePermissions';
 import { DateFilter, MediaFilter, SortOrder, useMediaLibrary } from '../../hooks/useMediaLibrary';
@@ -80,6 +94,7 @@ function GalleryEngine({ isGranted, requestPermission }: any) {
   const { getTrashIds, refreshTrash, moveManyToTrash } = useTrash();
   const { getPrivateIds, refreshPrivate, hideManyInPrivate } = usePrivateVault();
   const { albums, loading: loadingAlbums, refreshAlbums, moveAssetsToAlbum, createAlbumFromAssets } = useAlbumManager(Boolean(isGranted));
+  const insets = useSafeAreaInsets();
   const [mediaFilter, setMediaFilter] = useState<MediaFilter>('all');
   const [dateFilter, setDateFilter] = useState<DateFilter>('all');
   const [sortOrder, setSortOrder] = useState<SortOrder>('newest');
@@ -193,6 +208,7 @@ function GalleryEngine({ isGranted, requestPermission }: any) {
   const handleShareSelected = async () => {
     if (selectedAssets.length === 0) return;
     try {
+      clearSelection();
       if (selectedAssets.length > 1) {
         Alert.alert('Compartir', 'Por ahora se comparte un archivo a la vez. Se abrira el primero seleccionado.');
       }
@@ -218,6 +234,7 @@ function GalleryEngine({ isGranted, requestPermission }: any) {
           style: 'destructive',
           onPress: async () => {
             try {
+              clearSelection();
               setBulkProcessing(true);
               setProcessingTotal(selectedAssets.length);
               const { failed, movedIds } = await moveManyToTrash(selectedAssets, (processed, total) => {
@@ -248,6 +265,7 @@ function GalleryEngine({ isGranted, requestPermission }: any) {
     if (selectedAssets.length === 0 || bulkProcessing) return;
 
     try {
+      clearSelection();
       setBulkProcessing(true);
       setProcessingTotal(selectedAssets.length);
       const { failed } = await moveAssetsToAlbum(
@@ -274,6 +292,7 @@ function GalleryEngine({ isGranted, requestPermission }: any) {
     if (selectedAssets.length === 0 || bulkProcessing) return;
 
     try {
+      clearSelection();
       setBulkProcessing(true);
       setProcessingTotal(selectedAssets.length);
       const result = await createAlbumFromAssets(name, selectedAssets, 'move', (processed, total) => {
@@ -349,14 +368,14 @@ function GalleryEngine({ isGranted, requestPermission }: any) {
           </TouchableOpacity>
         </View>
       ) : (
-        <View style={styles.filtersContainer}>
+        <View style={[styles.filtersContainer, { paddingTop: SPACING.sm + Math.max(0, insets.top * 0.15) }]}>
           <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.filtersRow}>
             <FilterChip label="Todo" active={mediaFilter === 'all'} onPress={() => changeMediaFilter('all')} />
             <FilterChip label="Fotos" active={mediaFilter === 'photo'} onPress={() => changeMediaFilter('photo')} />
             <FilterChip label="Videos" active={mediaFilter === 'video'} onPress={() => changeMediaFilter('video')} />
             <FilterChip label="Capturas" active={mediaFilter === 'screenshot'} onPress={() => changeMediaFilter('screenshot')} />
           </ScrollView>
-          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.filtersRow}>
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={[styles.filtersRow, styles.filtersRowSecondary]}>
             <FilterChip label="Todo el tiempo" active={dateFilter === 'all'} onPress={() => changeDateFilter('all')} />
             <FilterChip label="Ultimo mes" active={dateFilter === 'month'} onPress={() => changeDateFilter('month')} />
             <FilterChip label="Ultimo año" active={dateFilter === 'year'} onPress={() => changeDateFilter('year')} />
@@ -579,15 +598,20 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   },
   filtersContainer: {
-    paddingTop: SPACING.sm,
-    backgroundColor: COLORS.background,
+    paddingTop: SPACING.md,
+    paddingBottom: SPACING.sm,
+    backgroundColor: COLORS.surface,
     borderBottomWidth: 1,
     borderBottomColor: COLORS.border,
   },
   filtersRow: {
     paddingHorizontal: SPACING.md,
+    paddingRight: SPACING.xl,
     paddingBottom: SPACING.sm,
     gap: SPACING.sm,
+  },
+  filtersRowSecondary: {
+    paddingTop: SPACING.xs,
   },
   filtersInfoRow: {
     paddingHorizontal: SPACING.md,
@@ -617,8 +641,8 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: COLORS.border,
     backgroundColor: COLORS.surface,
-    paddingHorizontal: 12,
-    paddingVertical: 8,
+    paddingHorizontal: 13,
+    paddingVertical: 9,
   },
   chipActive: {
     borderColor: COLORS.primary,
