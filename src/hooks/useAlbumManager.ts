@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import * as MediaLibrary from 'expo-media-library';
+import { deleteAssetsBatch } from '../utils/nativeMediaOps';
 
 interface MoveResult {
   moved: number;
@@ -8,6 +9,8 @@ interface MoveResult {
 }
 
 type ProgressCallback = (processed: number, total: number) => void;
+
+const yieldToUI = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
 
 export function useAlbumManager(isGranted: boolean) {
   const [albums, setAlbums] = useState<MediaLibrary.Album[]>([]);
@@ -63,7 +66,7 @@ export function useAlbumManager(isGranted: boolean) {
         await MediaLibrary.createAssetAsync(localUri, targetAlbumId);
         if (!copy) {
           try {
-            await MediaLibrary.deleteAssetsAsync([assetId]);
+            await deleteAssetsBatch([assetId]);
           } catch {
             // Ignore delete failure after successful copy to target.
           }
@@ -100,6 +103,22 @@ export function useAlbumManager(isGranted: boolean) {
           // Fall through to resilient per-item fallback.
         }
 
+        // Batch fallback for move mode: copy all first, then perform a single delete batch.
+        if (!copy) {
+          try {
+            const copiedAll = await MediaLibrary.addAssetsToAlbumAsync(ids, targetAlbumId, true);
+            if (copiedAll) {
+              const deletedAll = await deleteAssetsBatch(ids);
+              const moved = deletedAll ? ids.length : 0;
+              const failed = deletedAll ? 0 : ids.length;
+              onProgress?.(ids.length, ids.length);
+              return { moved, failed, movedIds: deletedAll ? ids : [] };
+            }
+          } catch {
+            // Fall through to per-item fallback.
+          }
+        }
+
         let moved = 0;
         let failed = 0;
         const movedIds: string[] = [];
@@ -113,6 +132,9 @@ export function useAlbumManager(isGranted: boolean) {
             failed += 1;
           }
           onProgress?.(moved + failed, assets.length);
+          if ((moved + failed) % 6 === 0) {
+            await yieldToUI();
+          }
         }
 
         return { moved, failed, movedIds };

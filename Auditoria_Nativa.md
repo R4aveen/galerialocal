@@ -53,3 +53,65 @@ Todos los siguientes paquetes listados en tu `package.json` integran **código n
 La aplicación es un híbrido entre un entorno de Javascript (React Native) y una fuerte interacción nativa, concentrada sobre todo en tu módulo hecho a medida (`galeria-media`) y en `expo-media-library`.
 
 El error más recurrente que experimentas sobre "Missing permission" o fallos de compilación se debe a lo rápido que interacciona el código asíncrono de Javascript (`React useEffects`) pidiendo recursos (Álbumes / Fotos) antes de que la capa de Android (`Kotlin / Java`) valide los `Android Manifest Permissions` vía los hooks respectivos.
+
+---
+
+## 4. Evaluación de Nativización de Componentes UI (Drag Select / Grid)
+
+### Estado actual
+
+- La grilla está en `src/components/PhotoGrid.tsx` con `FlashList`.
+- El drag select vive en JS/TS (`PhotoGrid` + `useSelectionStore`) y ya fue optimizado con delta incremental.
+- El cuello principal restante es CPU en JS durante gestos largos y reactividad por celdas visibles.
+
+### Qué SÍ conviene nativizar
+
+1. `PhotoGrid` como vista nativa Android (`RecyclerView`)
+- Motivo: hit testing, autoscroll y actualización de rango viven mejor en UI thread nativo.
+- Impacto esperado: drag select y scroll más fluidos en galerías grandes.
+
+2. Motor de selección de rango en nativo
+- Motivo: elimina el costo de recalcular/propagar estado de selección en JS por frame.
+- Impacto esperado: menos jank al arrastrar rápido sobre cientos de items.
+
+3. Timeline rail/scrubber en nativo (opcional)
+- Motivo: interacción continua de alta frecuencia.
+- Impacto esperado: scrub anual/mes más estable.
+
+### Qué NO conviene nativizar primero
+
+1. `PhotoThumbnail` aislado
+- Ganancia baja si la lista y el gesto principal siguen en JS.
+
+2. Pantallas de negocio (`albums.tsx`, `private.tsx`, `trash.tsx`)
+- Mejor mantenerlas en TS; no son el cuello duro de frames.
+
+### Ruta recomendada (sin reescritura total)
+
+Fase A (rápida)
+- Crear `NativePhotoGridView` (Expo View Module) con:
+  - render de thumbnails por `content://` uri
+  - selección simple
+  - evento `onSelectionChange`
+
+Fase B (alto impacto)
+- Añadir drag select nativo:
+  - ancla de rango
+  - autoscroll de borde
+  - `onDragSelectionDelta`
+
+Fase C (integración híbrida)
+- Mantener navegación, actions bar y lógica de producto en React.
+- Usar la vista nativa solo para la grilla en `index.tsx` y luego `album/[id].tsx`.
+
+### Criterio de decisión para migrar 100% grid a nativo
+
+- Si con optimizaciones JS (ya aplicadas) el drag select sigue con jank perceptible en dispositivos medios.
+- Si la tasa de frames cae de forma consistente en lotes > 5k assets.
+
+### Recomendación final
+
+- Mantener arquitectura híbrida:
+  - UI de producto en TS/React
+  - Grid interactiva + selección de rango en nativo
+- Esta combinación da la mayor mejora de fluidez con menor riesgo que migrar toda la app a Compose ahora.

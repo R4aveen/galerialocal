@@ -1,5 +1,5 @@
 import * as MediaLibrary from 'expo-media-library';
-import GaleriaMedia from '../../modules/galeria-media';
+import GaleriaMedia, { type NativePagedAsset } from '../../modules/galeria-media';
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { getSafeAssetTimestamp, hydrateTimestampCache, sortAssetsByTimestamp } from '../utils/mediaDate';
 import { dedupeAssetsById, getAssetIdentityKey } from '../utils/mediaAssets';
@@ -28,9 +28,29 @@ const isScreenshot = (asset: MediaLibrary.Asset) => {
   return name.includes('screenshot') || name.includes('captura');
 };
 
+const VIDEO_EXTENSIONS = ['.mp4', '.mov', '.m4v', '.3gp', '.mkv', '.webm', '.avi'];
+
+const getNormalizedMediaType = (asset: MediaLibrary.Asset): 'photo' | 'video' => {
+  const rawType = String((asset as any).mediaType ?? '').toLowerCase();
+  if (rawType.includes('video') || rawType === '2') return 'video';
+  if (rawType.includes('photo') || rawType.includes('image') || rawType === '1') return 'photo';
+
+  const filename = (asset.filename || asset.uri || '').toLowerCase();
+  if (VIDEO_EXTENSIONS.some((ext) => filename.endsWith(ext))) {
+    return 'video';
+  }
+
+  // Duration is usually present for videos when mediaType comes malformed.
+  if (typeof asset.duration === 'number' && asset.duration > 0) {
+    return 'video';
+  }
+
+  return 'photo';
+};
+
 // Configuración de paginación optimizada
-const INITIAL_LOAD = 80;
-const PAGE_SIZE = 400;
+const INITIAL_LOAD = 48;
+const PAGE_SIZE = 160;
 
 const getMediaTypesForQuery = (mediaFilter: MediaFilter): MediaLibrary.MediaTypeValue[] => {
   if (mediaFilter === 'video') return [MediaLibrary.MediaType.video];
@@ -42,11 +62,27 @@ const CACHE_TTL_MS = 90_000;
 const MAX_CACHE_ENTRIES = 12;
 const PREFETCH_TARGET_ALL = 800;
 const PREFETCH_TARGET_FILTERED = 400;
-const ALBUM_BACKFILL_PER_PAGE = 280;
-const ALBUM_BACKFILL_MAX_ASSETS = 40000;
+const ALBUM_BACKFILL_PER_PAGE = 120;
+const ALBUM_BACKFILL_MAX_ASSETS = 6000;
+const MIN_ASSETS_BEFORE_BACKFILL = 120;
+const UNKNOWN_TIMESTAMP_THRESHOLD = new Date('1991-01-01T00:00:00.000Z').getTime();
 const mediaQueryCache = new Map<string, MediaQueryCacheEntry>();
 
-const buildCacheKey = (mediaFilter: MediaFilter, sortOrder: SortOrder) => `${mediaFilter}::${sortOrder}`;
+const buildCacheKey = (sortOrder: SortOrder) => `all-media::${sortOrder}`;
+
+const toMediaLibraryAsset = (asset: NativePagedAsset): MediaLibrary.Asset => ({
+  id: asset.id,
+  uri: asset.uri,
+  filename: asset.filename || asset.id,
+  mediaType: asset.mediaType === 'video' ? 'video' : 'photo',
+  mediaSubtypes: [],
+  width: 0,
+  height: 0,
+  creationTime: asset.creationTime || 0,
+  modificationTime: asset.modificationTime || asset.creationTime || 0,
+  duration: 0,
+  albumId: undefined,
+});
 
 const updateCacheEntry = (key: string, entry: MediaQueryCacheEntry) => {
   mediaQueryCache.delete(key);
@@ -80,23 +116,36 @@ export function useMediaLibrary(isGranted: boolean, options: UseMediaLibraryOpti
   const [endCursor, setEndCursor] = useState<string | undefined>(undefined);
   const loadingRef = useRef(false);
   const assetsRef = useRef<MediaLibrary.Asset[]>([]);
+  const hasNextPageRef = useRef(true);
+  const endCursorRef = useRef<string | undefined>(undefined);
   const queryVersionRef = useRef(0);
   const backfilledKeyRef = useRef<string | null>(null);
+  const nativePagingEnabledRef = useRef(false);
+  const nativePageRef = useRef(0);
   const refreshToken = useMediaRefreshStore((state) => state.refreshToken);
   const cacheKey = useMemo(
-    () => buildCacheKey(options.mediaFilter, options.sortOrder),
-    [options.mediaFilter, options.sortOrder]
+    () => buildCacheKey(options.sortOrder),
+    [options.sortOrder]
   );
 
   useEffect(() => {
     assetsRef.current = assets;
   }, [assets]);
 
+  useEffect(() => {
+    hasNextPageRef.current = hasNextPage;
+  }, [hasNextPage]);
+
+  useEffect(() => {
+    endCursorRef.current = endCursor;
+  }, [endCursor]);
+
   const backfillFromAlbums = useCallback(async (requestVersion: number) => {
     // This pass scans album paths (including app-specific folders like WhatsApp variants)
     // to recover assets that might not appear in the global query on some devices.
     if (options.mediaFilter !== 'all' || options.dateFilter !== 'all') return;
     if (backfilledKeyRef.current === cacheKey) return;
+    if (assetsRef.current.length >= MIN_ASSETS_BEFORE_BACKFILL) return;
 
     try {
       const albums = await MediaLibrary.getAlbumsAsync({ includeSmartAlbums: true });
@@ -158,8 +207,8 @@ export function useMediaLibrary(isGranted: boolean, options: UseMediaLibraryOpti
         assetsRef.current = ordered;
         updateCacheEntry(cacheKey, {
           assets: ordered,
-          hasNextPage,
-          endCursor,
+          hasNextPage: hasNextPageRef.current,
+          endCursor: endCursorRef.current,
           updatedAt: Date.now(),
         });
         return ordered;
@@ -169,32 +218,81 @@ export function useMediaLibrary(isGranted: boolean, options: UseMediaLibraryOpti
     } catch (error) {
       console.error('Error during album backfill scan:', error);
     }
-  }, [cacheKey, endCursor, hasNextPage, options.dateFilter, options.mediaFilter, options.sortOrder]);
+  }, [cacheKey, options.dateFilter, options.mediaFilter, options.sortOrder]);
 
   const loadAssets = useCallback(async (after?: string, reset = false) => {
     if (!isGranted || loadingRef.current || (!after && !reset && assetsRef.current.length > 0)) {
       return;
     }
 
+    const isNativeCursor = typeof after === 'string' && after.startsWith('native');
+
     const requestVersion = queryVersionRef.current;
     loadingRef.current = true;
     setLoading(true);
     try {
-      // ✅ [Nativo Local]: Para cuando se compile el bridge de Android, 
-      // reemplazamos el fetch de expo-media-library con esto:
-      /*
-      if (!after) {
-        const groupedData = await GaleriaMedia.getGroupedAssetsAsync('all');
-        console.log("Assets Agrupados desde Kotlin:", groupedData.length);
-      }
-      */
+      let nextAssets: MediaLibrary.Asset[] = [];
+      let next = false;
+      let cursor: string | undefined = after;
 
-      const { assets: nextAssets, hasNextPage: next, endCursor: cursor } = await MediaLibrary.getAssetsAsync({
-        mediaType: getMediaTypesForQuery(options.mediaFilter),
-        sortBy: [[MediaLibrary.SortBy.creationTime, options.sortOrder === 'oldest']],
-        first: after ? PAGE_SIZE : INITIAL_LOAD,
-        after,
-      });
+      if (reset || !after) {
+        nativePageRef.current = 0;
+      }
+
+      if (options.dateFilter === 'all') {
+        try {
+          const pageSize = after ? PAGE_SIZE : INITIAL_LOAD;
+          const pageToLoad = after ? nativePageRef.current + 1 : 0;
+          const nativeAssets = await GaleriaMedia.getPagedAssetsChunkAsync({
+            page: pageToLoad,
+            pageSize,
+            mediaFilter: 'all',
+            sortOrder: options.sortOrder,
+          });
+
+          if (Array.isArray(nativeAssets) && nativeAssets.length > 0) {
+            nextAssets = nativeAssets.map(toMediaLibraryAsset);
+            next = nativeAssets.length >= pageSize;
+            cursor = `native:${pageToLoad}`;
+            nativePageRef.current = pageToLoad;
+            nativePagingEnabledRef.current = true;
+          } else if (after) {
+            nextAssets = [];
+            next = false;
+            cursor = undefined;
+            nativePagingEnabledRef.current = true;
+          }
+        } catch (nativeError) {
+          console.warn('Native initial media query failed, falling back to expo-media-library:', nativeError);
+          nativePagingEnabledRef.current = false;
+        }
+      }
+
+      if (nextAssets.length === 0) {
+        if (isNativeCursor) {
+          // Native paging reached end or failed for this cursor; avoid invalid "after" fallbacks.
+          next = false;
+          cursor = undefined;
+          setHasNextPage(false);
+          setEndCursor(undefined);
+          return;
+        }
+
+        const safeAfter = typeof after === 'string' && !after.startsWith('native') && !after.includes(':')
+          ? after
+          : undefined;
+
+        const page = await MediaLibrary.getAssetsAsync({
+          mediaType: getMediaTypesForQuery('all'),
+          sortBy: [[MediaLibrary.SortBy.creationTime, options.sortOrder === 'oldest']],
+          first: safeAfter ? PAGE_SIZE : INITIAL_LOAD,
+          after: safeAfter,
+        });
+        nextAssets = page.assets;
+        next = page.hasNextPage;
+        cursor = page.endCursor;
+        nativePagingEnabledRef.current = false;
+      }
 
       if (requestVersion !== queryVersionRef.current) {
         return;
@@ -223,7 +321,11 @@ export function useMediaLibrary(isGranted: boolean, options: UseMediaLibraryOpti
       setEndCursor(cursor);
 
       if (!after && options.mediaFilter === 'all' && options.dateFilter === 'all') {
-        void backfillFromAlbums(requestVersion);
+        setTimeout(() => {
+          if (requestVersion === queryVersionRef.current) {
+            void backfillFromAlbums(requestVersion);
+          }
+        }, 350);
       }
 
       // Load timestamp cache in background (non-blocking):
@@ -337,13 +439,16 @@ export function useMediaLibrary(isGranted: boolean, options: UseMediaLibraryOpti
       const assetKey = getAssetIdentityKey(asset);
       if (excludeSet.has(assetKey)) return false;
 
-      if (options.mediaFilter === 'photo' && asset.mediaType !== 'photo') return false;
-      if (options.mediaFilter === 'video' && asset.mediaType !== 'video') return false;
-      if (options.mediaFilter === 'screenshot' && !isScreenshot(asset)) return false;
+      const normalizedType = getNormalizedMediaType(asset);
+
+      if (options.mediaFilter === 'photo' && normalizedType !== 'photo') return false;
+      if (options.mediaFilter === 'video' && normalizedType !== 'video') return false;
+      if (options.mediaFilter === 'screenshot' && (normalizedType !== 'photo' || !isScreenshot(asset))) return false;
 
       const createdAt = getSafeAssetTimestamp(asset);
-      if (options.dateFilter === 'month' && createdAt < monthAgo) return false;
-      if (options.dateFilter === 'year' && createdAt < yearAgo) return false;
+      const hasReliableTimestamp = createdAt > UNKNOWN_TIMESTAMP_THRESHOLD;
+      if (options.dateFilter === 'month' && hasReliableTimestamp && createdAt < monthAgo) return false;
+      if (options.dateFilter === 'year' && hasReliableTimestamp && createdAt < yearAgo) return false;
 
       return true;
     });
@@ -389,13 +494,18 @@ export function useMediaLibrary(isGranted: boolean, options: UseMediaLibraryOpti
     const retryTimer = setTimeout(() => {
       // Retry album backfill if global query is still empty in the main view.
       void backfillFromAlbums(queryVersionRef.current);
-    }, 180);
+    }, 600);
 
     return () => clearTimeout(retryTimer);
   }, [assets.length, backfillFromAlbums, isGranted, loading, options.dateFilter, options.mediaFilter]);
 
   const loadMore = () => {
-    if (hasNextPage && endCursor) {
+    if (!hasNextPage) return;
+    if (nativePagingEnabledRef.current) {
+      loadAssets('native:next');
+      return;
+    }
+    if (endCursor) {
       loadAssets(endCursor);
     }
   };

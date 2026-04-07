@@ -1,8 +1,8 @@
-import { Share } from 'react-native';
+import { Platform, Share } from 'react-native';
 import * as FileSystem from 'expo-file-system/legacy';
 import * as MediaLibrary from 'expo-media-library';
 import * as Sharing from 'expo-sharing';
-import JSZip from 'jszip';
+import GaleriaMedia from '../../modules/galeria-media';
 
 interface PrepareShareUriOptions {
   assetId?: string;
@@ -13,6 +13,8 @@ interface PrepareShareUriOptions {
 interface PreparedShareItem {
   uri: string;
   filename: string;
+  assetId?: string;
+  sourceUri?: string;
 }
 
 const hasExtension = (name: string) => /\.[a-z0-9]{2,6}$/i.test(name);
@@ -85,6 +87,27 @@ export async function sharePreparedUri(shareUri: string, dialogTitle?: string): 
 }
 
 export async function prepareShareUris(optionsList: PrepareShareUriOptions[]): Promise<PreparedShareItem[]> {
+  if (Platform.OS === 'android') {
+    const prepared: PreparedShareItem[] = [];
+    const seen = new Set<string>();
+
+    for (const options of optionsList) {
+      const fallbackName = options.filename || options.fallbackUri?.split('/').pop() || 'shared-media.bin';
+      const key = `${options.assetId || ''}::${options.fallbackUri || ''}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+
+      prepared.push({
+        uri: options.fallbackUri || '',
+        filename: hasExtension(fallbackName) ? fallbackName : `${fallbackName}.bin`,
+        assetId: options.assetId,
+        sourceUri: options.fallbackUri,
+      });
+    }
+
+    return prepared;
+  }
+
   const prepared: PreparedShareItem[] = [];
   const seen = new Set<string>();
 
@@ -100,31 +123,45 @@ export async function prepareShareUris(optionsList: PrepareShareUriOptions[]): P
   return prepared;
 }
 
-const sanitizeFilename = (filename: string, index: number) => {
-  const safe = filename.replace(/[\\/:*?"<>|]/g, '_').trim();
-  return safe.length > 0 ? safe : `media-${index + 1}.bin`;
-};
+async function shareFilesNativelyAndroid(items: PreparedShareItem[], dialogTitle?: string): Promise<boolean> {
+  try {
+    return await GaleriaMedia.shareMediaItemsAsync(
+      items.map((item) => ({
+        assetId: item.assetId,
+        sourceUri: item.sourceUri || item.uri,
+        filename: item.filename,
+      })),
+      dialogTitle || 'Compartir'
+    );
+  } catch {
+    return false;
+  }
+}
 
-async function buildZipFromPreparedItems(items: PreparedShareItem[]): Promise<string> {
-  const zip = new JSZip();
-
-  for (let i = 0; i < items.length; i += 1) {
-    const item = items[i];
-    const fileBase64 = await FileSystem.readAsStringAsync(item.uri, {
-      encoding: FileSystem.EncodingType.Base64,
-    });
-    zip.file(sanitizeFilename(item.filename, i), fileBase64, { base64: true });
+export async function shareMediaOptions(optionsList: PrepareShareUriOptions[], dialogTitle?: string): Promise<void> {
+  if (optionsList.length === 0) {
+    throw new Error('No files to share.');
   }
 
-  const outputBase64 = await zip.generateAsync({ type: 'base64', compression: 'DEFLATE' });
-  const baseDir = FileSystem.cacheDirectory || FileSystem.documentDirectory;
-  const zipUri = `${baseDir}${Date.now()}_galetiki-share.zip`;
+  if (Platform.OS === 'android') {
+    const launched = await GaleriaMedia.shareMediaItemsAsync(
+      optionsList.map((item) => ({
+        assetId: item.assetId,
+        sourceUri: item.fallbackUri,
+        filename: item.filename,
+      })),
+      dialogTitle || 'Compartir archivos'
+    );
 
-  await FileSystem.writeAsStringAsync(zipUri, outputBase64, {
-    encoding: FileSystem.EncodingType.Base64,
-  });
+    if (launched) {
+      return;
+    }
 
-  return zipUri;
+    throw new Error('No se pudo iniciar el compartido en lote nativo de Android.');
+  }
+
+  const prepared = await prepareShareUris(optionsList);
+  await sharePreparedUris(prepared, dialogTitle);
 }
 
 export async function sharePreparedUris(items: PreparedShareItem[], dialogTitle?: string): Promise<void> {
@@ -132,11 +169,24 @@ export async function sharePreparedUris(items: PreparedShareItem[], dialogTitle?
     throw new Error('No files to share.');
   }
 
+  if (Platform.OS === 'android') {
+    const launched = await shareFilesNativelyAndroid(items, dialogTitle || 'Compartir archivos');
+    if (launched) {
+      return;
+    }
+
+    // Do not fallback to per-file share sheets on Android.
+    // We want one batch action only.
+    throw new Error('No se pudo iniciar el compartido en lote nativo de Android.');
+  }
+
   if (items.length === 1) {
     await sharePreparedUri(items[0].uri, dialogTitle || 'Compartir archivo');
     return;
   }
 
-  const zipUri = await buildZipFromPreparedItems(items);
-  await sharePreparedUri(zipUri, dialogTitle || 'Compartir archivos');
+  // Non-Android fallback: share files one by one to avoid forcing ZIP packaging.
+  for (const item of items) {
+    await sharePreparedUri(item.uri, dialogTitle || 'Compartir archivo');
+  }
 }

@@ -1,6 +1,19 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import * as FileSystem from 'expo-file-system/legacy';
 import * as MediaLibrary from 'expo-media-library';
+import {
+  copyFileNative,
+  copyFilesAndDeleteNative,
+  copyFilesNative,
+  deleteAssetsBatch,
+  restoreFilesNative,
+  type NativeCopyAndDeleteRequest,
+  type NativeCopyAndDeleteResult,
+  type NativeCopyRequest,
+  type NativeCopyResult,
+  type NativeRestoreRequest,
+  type NativeRestoreResult,
+} from '../utils/nativeMediaOps';
 import { dedupeAssetsById } from '../utils/mediaAssets';
 import { bumpMediaRefresh } from '../store/useMediaRefreshStore';
 
@@ -31,12 +44,12 @@ interface PrivateBatchResult {
 type ProgressCallback = (processed: number, total: number) => void;
 
 const PRIVATE_ALBUM_NAME = 'GaleriaLocal Privadas';
-const RESTORED_ALBUM_NAME = 'GaleriaLocal Restauradas';
-
 const VAULT_BASE = FileSystem.documentDirectory || FileSystem.cacheDirectory;
 const VAULT_DIR = `${VAULT_BASE}.secure_private/`;
 const VAULT_INDEX = `${VAULT_DIR}index.json`;
 const NO_MEDIA = `${VAULT_DIR}.nomedia`;
+
+const yieldToUI = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
 
 const toMs = (unixTimestamp: number) =>
   unixTimestamp > 1_000_000_000_000 ? unixTimestamp : unixTimestamp * 1000;
@@ -136,6 +149,7 @@ export function usePrivateVault() {
 
     const existing = await readIndex();
     const next = [...existing];
+    const prepared: Array<{ asset: MediaLibrary.Asset; source: string; dest: string; entry: PrivateItem }> = [];
 
     for (const asset of albumAssets) {
       try {
@@ -154,26 +168,56 @@ export function usePrivateVault() {
         const localId = randomId();
         const dest = `${VAULT_DIR}${localId}${fileExt(name) || '.bin'}`;
 
-        await FileSystem.copyAsync({ from: source, to: dest });
-
-        next.push({
-          id: localId,
-          filename: name,
-          uri: dest,
-          originalPath: source,
-          hiddenAt: toMs(asset.creationTime || Date.now()),
-          status: 'active',
-          archivedAt: null,
-          trashedAt: null,
+        prepared.push({
+          asset,
+          source,
+          dest,
+          entry: {
+            id: localId,
+            filename: name,
+            uri: dest,
+            originalPath: source,
+            hiddenAt: toMs(asset.creationTime || Date.now()),
+            status: 'active',
+            archivedAt: null,
+            trashedAt: null,
+          },
         });
-
-        try {
-          await MediaLibrary.deleteAssetsAsync([asset.id]);
-        } catch {
-          // Ignore delete failure in migration.
-        }
       } catch (error) {
         console.error('Error migrating album private asset:', error);
+      }
+    }
+
+    const nativeResults = await copyFilesNative(
+      prepared.map((item) => ({ sourceUri: item.source, destinationPath: item.dest }))
+    );
+    const nativeCopiedDestinations = new Set(
+      nativeResults.filter((result) => result.copied).map((result) => result.destinationPath)
+    );
+
+    const migratedAssetIds: string[] = [];
+
+    for (const item of prepared) {
+      try {
+        if (!nativeCopiedDestinations.has(item.dest)) {
+          const copiedNatively = await copyFileNative(item.source, item.dest);
+          if (!copiedNatively) {
+            throw new Error('Native copy failed during migration from legacy private album.');
+          }
+        }
+
+        next.push(item.entry);
+        migratedAssetIds.push(item.asset.id);
+      } catch (error) {
+        console.error('Error migrating album private asset:', item.asset.id, error);
+      }
+    }
+
+    if (migratedAssetIds.length > 0) {
+      try {
+        await deleteAssetsBatch(migratedAssetIds);
+      } catch {
+        // Ignore delete failure in migration.
       }
     }
 
@@ -238,6 +282,7 @@ export function usePrivateVault() {
 
       let failed = 0;
       const copied: Array<{ assetId: string; dest: string; entry: PrivateItem }> = [];
+      const prepared: Array<{ asset: MediaLibrary.Asset; source: string; dest: string; entry: PrivateItem }> = [];
 
       for (const asset of assets) {
         try {
@@ -260,9 +305,9 @@ export function usePrivateVault() {
           const name = asset.filename || `${asset.id}${fileExt(source) || '.bin'}`;
           const dest = `${VAULT_DIR}${localId}${fileExt(name) || '.bin'}`;
 
-          await FileSystem.copyAsync({ from: source, to: dest });
-          copied.push({
-            assetId: asset.id,
+          prepared.push({
+            asset,
+            source,
             dest,
             entry: {
               id: localId,
@@ -275,30 +320,109 @@ export function usePrivateVault() {
               trashedAt: null,
             },
           });
-          onProgress?.(copied.length + failed, assets.length);
         } catch (error) {
           console.error('Error copying asset into secure vault:', asset.id, error);
           failed += 1;
           onProgress?.(copied.length + failed, assets.length);
+          if ((copied.length + failed) % 6 === 0) {
+            await yieldToUI();
+          }
         }
       }
 
-      const copiedIds = copied.map((c) => c.assetId);
-      let bulkDeleted = false;
-      if (copiedIds.length > 0) {
+      const nativeCompositeResults = await copyFilesAndDeleteNative(
+        prepared.map((item) => ({
+          assetId: item.asset.id,
+          sourceUri: item.source,
+          destinationPath: item.dest,
+        }))
+      );
+      const nativeByAssetId = new Map(
+        nativeCompositeResults.map((result) => [result.assetId, result])
+      );
+      const pendingDelete: Array<{ assetId: string; dest: string; entry: PrivateItem }> = [];
+
+      for (const item of prepared) {
         try {
-          bulkDeleted = await MediaLibrary.deleteAssetsAsync(copiedIds);
+          const nativeResult = nativeByAssetId.get(item.asset.id);
+          let copiedFile = nativeResult?.copied === true;
+
+          if (!copiedFile) {
+            const copiedNatively = await copyFileNative(item.source, item.dest);
+            if (copiedNatively) {
+              copiedFile = true;
+            }
+          }
+
+          if (!copiedFile) {
+            failed += 1;
+            onProgress?.(copied.length + failed, assets.length);
+            continue;
+          }
+
+          if (nativeResult?.deleted === true) {
+            copied.push({
+              assetId: item.asset.id,
+              dest: item.dest,
+              entry: item.entry,
+            });
+          } else {
+            pendingDelete.push({
+              assetId: item.asset.id,
+              dest: item.dest,
+              entry: item.entry,
+            });
+          }
+        } catch (error) {
+          console.error('Error copying asset into secure vault:', item.asset.id, error);
+          failed += 1;
+        }
+
+        onProgress?.(copied.length + failed, assets.length);
+        if ((copied.length + failed) % 6 === 0) {
+          await yieldToUI();
+        }
+      }
+
+      if (pendingDelete.length > 0) {
+        const pendingIds = pendingDelete.map((item) => item.assetId);
+        let bulkDeleted = false;
+
+        try {
+          bulkDeleted = await deleteAssetsBatch(pendingIds);
         } catch {
           bulkDeleted = false;
         }
-      }
 
-      if (!bulkDeleted) {
-        // If Android rejects bulk delete or user denies, roll back copied files.
-        for (const item of copied) {
-          await FileSystem.deleteAsync(item.dest, { idempotent: true });
+        if (bulkDeleted) {
+          for (const item of pendingDelete) {
+            copied.push({
+              assetId: item.assetId,
+              dest: item.dest,
+              entry: item.entry,
+            });
+
+            onProgress?.(copied.length + failed, assets.length);
+            if ((copied.length + failed) % 6 === 0) {
+              await yieldToUI();
+            }
+          }
+        } else {
+          // If batch delete fails, rollback copied files for these pending items.
+          for (const item of pendingDelete) {
+            failed += 1;
+            try {
+              await FileSystem.deleteAsync(item.dest, { idempotent: true });
+            } catch {
+              // Ignore rollback cleanup failure.
+            }
+
+            onProgress?.(copied.length + failed, assets.length);
+            if ((copied.length + failed) % 6 === 0) {
+              await yieldToUI();
+            }
+          }
         }
-        return { hidden: 0, failed: assets.length, movedIds: [] };
       }
 
       for (const item of copied) {
@@ -308,7 +432,7 @@ export function usePrivateVault() {
       await writeIndex(sortPrivateItems(index));
       await refreshPrivate();
       bumpMediaRefresh();
-      return { hidden: copied.length, failed, movedIds: copiedIds };
+      return { hidden: copied.length, failed, movedIds: copied.map((item) => item.assetId) };
     },
     [ensureVault, readIndex, refreshPrivate, writeIndex]
   );
@@ -334,7 +458,21 @@ export function usePrivateVault() {
 
       let processed = 0;
       let failed = 0;
-      let targetAlbumId = albumId;
+      const targetAlbumId = albumId;
+      const restoredAssetIds: string[] = [];
+
+      const eligibleForNative = privateItems
+        .map((item) => byId.get(item.id))
+        .filter((item): item is PrivateItem => Boolean(item && item.status !== 'trash' && item.uri));
+
+      const nativeResults = await restoreFilesNative(
+        eligibleForNative.map((item) => ({
+          itemId: item.id,
+          sourcePath: item.uri,
+          filename: item.filename,
+        }))
+      );
+      const nativeById = new Map(nativeResults.map((result) => [result.itemId, result]));
 
       for (const item of privateItems) {
         const existing = byId.get(item.id);
@@ -345,34 +483,48 @@ export function usePrivateVault() {
         }
 
         try {
-          if (!targetAlbumId) {
-            const restoredAlbum = await MediaLibrary.getAlbumAsync(RESTORED_ALBUM_NAME);
-            targetAlbumId = restoredAlbum?.id;
-          }
+          const nativeResult = nativeById.get(existing.id);
+          const nativeRestored = nativeResult?.restored === true;
+          const restoredAssetId = nativeResult?.assetId || null;
 
-          let created: MediaLibrary.Asset | null = null;
-          if (targetAlbumId) {
-            created = await MediaLibrary.createAssetAsync(existing.uri, targetAlbumId);
-          } else {
-            created = await MediaLibrary.createAssetAsync(existing.uri);
-            const album = await MediaLibrary.createAlbumAsync(RESTORED_ALBUM_NAME, created, false);
-            targetAlbumId = album.id;
-          }
-
-          if (!created) {
+          if (!nativeRestored || !restoredAssetId) {
             failed += 1;
             onProgress?.(processed + failed, privateItems.length);
+            if ((processed + failed) % 6 === 0) {
+              await yieldToUI();
+            }
             continue;
           }
 
-          await FileSystem.deleteAsync(existing.uri, { idempotent: true });
+          restoredAssetIds.push(restoredAssetId);
+
+          try {
+            await FileSystem.deleteAsync(existing.uri, { idempotent: true });
+          } catch {
+            // Keep successful restore even if cleanup fails.
+          }
           byId.delete(existing.id);
           processed += 1;
           onProgress?.(processed + failed, privateItems.length);
+          if ((processed + failed) % 6 === 0) {
+            await yieldToUI();
+          }
         } catch (error) {
           console.error('Error restoring private item:', item.id, error);
           failed += 1;
           onProgress?.(processed + failed, privateItems.length);
+          if ((processed + failed) % 6 === 0) {
+            await yieldToUI();
+          }
+        }
+      }
+
+      // Batch add to target album in one call to avoid per-item permission prompts/jank.
+      if (targetAlbumId && restoredAssetIds.length > 0) {
+        try {
+          await MediaLibrary.addAssetsToAlbumAsync(restoredAssetIds as any, targetAlbumId, false);
+        } catch {
+          // Restored files are already in MediaStore; album grouping failure is non-fatal.
         }
       }
 

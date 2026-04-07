@@ -15,7 +15,7 @@ import { useSelectionStore } from '../../store/useSelectionStore';
 import PhotoGrid from '../../components/PhotoGrid';
 import AlbumManagerModal from '../../components/AlbumManagerModal';
 import { usePhotoSelectionHandlers } from '../../hooks/usePhotoSelectionHandlers';
-import { prepareShareUris, sharePreparedUris } from '../../utils/shareMedia';
+import { shareMediaOptions } from '../../utils/shareMedia';
 import { ThemeColors, useAppTheme } from '../../theme/AppThemeContext';
 import { getAssetIdentityKey } from '../../utils/mediaAssets';
 
@@ -197,13 +197,13 @@ export default function PrivateScreen() {
       clearSelection();
       setProcessing(true);
 
-      const prepared = await prepareShareUris(
+      await shareMediaOptions(
         selectedPrivateItems.map((item) => ({
           fallbackUri: item.uri,
           filename: item.filename,
-        }))
+        })),
+        selectedPrivateItems.length > 1 ? 'Compartir archivos privados' : 'Compartir archivo privado'
       );
-      await sharePreparedUris(prepared, selectedPrivateItems.length > 1 ? 'Compartir archivos privados' : 'Compartir archivo privado');
 
       clearSelection();
     } catch (error) {
@@ -256,45 +256,69 @@ export default function PrivateScreen() {
   const handleRestoreSelected = async (albumId?: string) => {
     if (selectedPrivateItems.length === 0 || processing) return;
 
-    try {
-      clearSelection();
-      setProcessing(true);
-      setProcessingTotal(selectedPrivateItems.length);
-      const { failed } = activeTab === 'trash'
-        ? await restoreManyPrivateFromTrash(selectedPrivateItems, (processed, total) => {
-            setProcessingCurrent(processed);
-            setProcessingTotal(total);
-          })
-        : await restoreManyFromPrivate(selectedPrivateItems, albumId, (processed, total) => {
-            setProcessingCurrent(processed);
-            setProcessingTotal(total);
-          });
-      setShowAlbumModal(false);
-      if (failed > 0) {
-        Alert.alert('Atencion', `${failed} elementos no se pudieron restaurar.`);
-      }
-    } finally {
-      setProcessing(false);
-    }
+    Alert.alert(
+      activeTab === 'trash' ? 'Restaurar desde papelera privada' : 'Restaurar desde privadas',
+      `Se restauraran ${selectedPrivateItems.length} elementos.`,
+      [
+        { text: 'Cancelar', style: 'cancel' },
+        {
+          text: 'Restaurar',
+          onPress: async () => {
+            try {
+              clearSelection();
+              setProcessing(true);
+              setProcessingTotal(selectedPrivateItems.length);
+              const { failed } = activeTab === 'trash'
+                ? await restoreManyPrivateFromTrash(selectedPrivateItems, (processed, total) => {
+                    setProcessingCurrent(processed);
+                    setProcessingTotal(total);
+                  })
+                : await restoreManyFromPrivate(selectedPrivateItems, albumId, (processed, total) => {
+                    setProcessingCurrent(processed);
+                    setProcessingTotal(total);
+                  });
+              setShowAlbumModal(false);
+              if (failed > 0) {
+                Alert.alert('Atencion', `${failed} elementos no se pudieron restaurar.`);
+              }
+            } finally {
+              setProcessing(false);
+            }
+          },
+        },
+      ]
+    );
   };
 
   const handleArchiveSelected = async () => {
     if (selectedPrivateItems.length === 0 || processing) return;
 
-    try {
-      clearSelection();
-      setProcessing(true);
-      setProcessingTotal(selectedPrivateItems.length);
-      const { failed } = await archiveManyPrivate(selectedPrivateItems, (processed, total) => {
-        setProcessingCurrent(processed);
-        setProcessingTotal(total);
-      });
-      if (failed > 0) {
-        Alert.alert('Atencion', `${failed} elementos no se pudieron archivar.`);
-      }
-    } finally {
-      setProcessing(false);
-    }
+    Alert.alert(
+      'Archivar seleccionadas',
+      `Se archivaran ${selectedPrivateItems.length} elementos en privadas.`,
+      [
+        { text: 'Cancelar', style: 'cancel' },
+        {
+          text: 'Archivar',
+          onPress: async () => {
+            try {
+              clearSelection();
+              setProcessing(true);
+              setProcessingTotal(selectedPrivateItems.length);
+              const { failed } = await archiveManyPrivate(selectedPrivateItems, (processed, total) => {
+                setProcessingCurrent(processed);
+                setProcessingTotal(total);
+              });
+              if (failed > 0) {
+                Alert.alert('Atencion', `${failed} elementos no se pudieron archivar.`);
+              }
+            } finally {
+              setProcessing(false);
+            }
+          },
+        },
+      ]
+    );
   };
 
   const handleRestoreArchivedSelected = async () => {

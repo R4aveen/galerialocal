@@ -17,7 +17,7 @@ import { setGallerySession } from '../../store/gallerySession';
 import { useSelectionStore } from '../../store/useSelectionStore';
 import { usePhotoSelectionHandlers } from '../../hooks/usePhotoSelectionHandlers';
 import { dedupeAssetsById, getAssetIdentityKey } from '../../utils/mediaAssets';
-import { prepareShareUris, sharePreparedUris } from '../../utils/shareMedia';
+import { shareMediaOptions } from '../../utils/shareMedia';
 import { ThemeColors, useAppTheme } from '../../theme/AppThemeContext';
 
 const PAGE_SIZE = 50;
@@ -180,14 +180,14 @@ export default function AlbumDetailScreen() {
     if (selectedAssets.length === 0) return;
     try {
       clearSelection();
-      const prepared = await prepareShareUris(
+      await shareMediaOptions(
         selectedAssets.map((item) => ({
           assetId: item.id,
           fallbackUri: item.uri,
           filename: item.filename,
-        }))
+        })),
+        selectedAssets.length > 1 ? 'Compartir archivos' : 'Compartir archivo'
       );
-      await sharePreparedUris(prepared, selectedAssets.length > 1 ? 'Compartir archivos' : 'Compartir archivo');
     } catch (error) {
       console.error('Error sharing selected album assets:', error);
       Alert.alert('Error al compartir', 'No se pudo compartir el archivo seleccionado.');

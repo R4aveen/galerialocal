@@ -10,6 +10,7 @@ import {
   TouchableOpacity,
   ScrollView,
   InteractionManager,
+  Platform,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useFocusEffect } from '@react-navigation/native';
@@ -19,6 +20,7 @@ import { useTrash } from '../../hooks/useTrash';
 import { usePrivateVault } from '../../hooks/usePrivateVault';
 import { useAlbumManager } from '../../hooks/useAlbumManager';
 import PhotoGrid from '../../components/PhotoGrid';
+import NativePhotoGrid from '../../components/NativePhotoGrid';
 import AlbumManagerModal from '../../components/AlbumManagerModal';
 import { SPACING } from '../../constants/theme';
 import { CameraOff, FolderInput, Lock, Share2, Trash2, X } from 'lucide-react-native';
@@ -26,7 +28,7 @@ import { useRouter } from 'expo-router';
 import { setGallerySession } from '../../store/gallerySession';
 import { useSelectionStore } from '../../store/useSelectionStore';
 import { usePhotoSelectionHandlers } from '../../hooks/usePhotoSelectionHandlers';
-import { prepareShareUris, sharePreparedUris } from '../../utils/shareMedia';
+import { shareMediaOptions } from '../../utils/shareMedia';
 import { ThemeColors, useAppTheme } from '../../theme/AppThemeContext';
 import { getAssetIdentityKey } from '../../utils/mediaAssets';
 
@@ -138,6 +140,7 @@ function GalleryEngine({ isGranted, requestPermission }: any) {
   });
   const router = useRouter();
   const hasActiveFilters = mediaFilter !== 'all' || dateFilter !== 'all' || sortOrder !== 'newest';
+  const useNativeGrid = Platform.OS === 'android' && !selectionMode;
 
   useEffect(() => {
     if (!initialResetDoneRef.current) {
@@ -224,14 +227,14 @@ function GalleryEngine({ isGranted, requestPermission }: any) {
     if (selectedAssets.length === 0) return;
     try {
       clearSelection();
-      const prepared = await prepareShareUris(
+      await shareMediaOptions(
         selectedAssets.map((item) => ({
           assetId: item.id,
           fallbackUri: item.uri,
           filename: item.filename,
-        }))
+        })),
+        selectedAssets.length > 1 ? 'Compartir archivos' : 'Compartir archivo'
       );
-      await sharePreparedUris(prepared, selectedAssets.length > 1 ? 'Compartir archivos' : 'Compartir archivo');
     } catch (error) {
       console.error('Error sharing selected assets:', error);
       Alert.alert('Error al compartir', 'No se pudo compartir el archivo seleccionado.');
@@ -338,31 +341,43 @@ function GalleryEngine({ isGranted, requestPermission }: any) {
     const idsToMove = assetsToMove.map((asset) => getAssetIdentityKey(asset));
     if (idsToMove.length === 0) return;
 
-    // UX: remove instantly and continue in background.
-    setOptimisticExcludedIds((prev) => Array.from(new Set([...prev, ...idsToMove])));
-    clearSelection();
+    Alert.alert(
+      'Mover a privadas',
+      `Se moveran ${assetsToMove.length} elementos al vault privado.`,
+      [
+        { text: 'Cancelar', style: 'cancel' },
+        {
+          text: 'Mover',
+          style: 'destructive',
+          onPress: () => {
+            // UX: remove instantly and continue in background.
+            setOptimisticExcludedIds((prev) => Array.from(new Set([...prev, ...idsToMove])));
+            clearSelection();
 
-    setTimeout(() => {
-      void (async () => {
-        try {
-          setBulkProcessing(true);
-          setProcessingCurrent(0);
-          setProcessingTotal(assetsToMove.length);
-          const { hidden, failed } = await hideManyInPrivate(assetsToMove, (processed, total) => {
-            setProcessingCurrent(processed);
-            setProcessingTotal(total);
-          });
-          await refreshPrivate();
+            setTimeout(() => {
+              void (async () => {
+                try {
+                  setBulkProcessing(true);
+                  setProcessingCurrent(0);
+                  setProcessingTotal(assetsToMove.length);
+                  const { hidden, failed } = await hideManyInPrivate(assetsToMove, (processed, total) => {
+                    setProcessingCurrent(processed);
+                    setProcessingTotal(total);
+                  });
+                  await refreshPrivate();
 
-          // Keep it non-intrusive: only show alert if something failed.
-          if (failed > 0) {
-            Alert.alert('Resultado parcial', `${hidden} movidos a privados, ${failed} fallaron.`);
-          }
-        } finally {
-          setBulkProcessing(false);
-        }
-      })();
-    }, 0);
+                  if (failed > 0) {
+                    Alert.alert('Resultado parcial', `${hidden} movidos a privados, ${failed} fallaron.`);
+                  }
+                } finally {
+                  setBulkProcessing(false);
+                }
+              })();
+            }, 0);
+          },
+        },
+      ]
+    );
   };
 
   return (
@@ -387,35 +402,37 @@ function GalleryEngine({ isGranted, requestPermission }: any) {
         </View>
       ) : (
         <View style={[styles.filtersContainer, { paddingTop: SPACING.sm + Math.max(0, insets.top * 0.15) }]}>
-          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.filtersRow}>
-            <FilterChip label="Todo" active={mediaFilter === 'all'} onPress={() => changeMediaFilter('all')} colors={colors} mode={mode} />
-            <FilterChip label="Fotos" active={mediaFilter === 'photo'} onPress={() => changeMediaFilter('photo')} colors={colors} mode={mode} />
-            <FilterChip label="Videos" active={mediaFilter === 'video'} onPress={() => changeMediaFilter('video')} colors={colors} mode={mode} />
-            <FilterChip label="Capturas" active={mediaFilter === 'screenshot'} onPress={() => changeMediaFilter('screenshot')} colors={colors} mode={mode} />
-          </ScrollView>
-          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={[styles.filtersRow, styles.filtersRowSecondary]}>
-            <FilterChip label="Todo el tiempo" active={dateFilter === 'all'} onPress={() => changeDateFilter('all')} colors={colors} mode={mode} />
-            <FilterChip label="Ultimo mes" active={dateFilter === 'month'} onPress={() => changeDateFilter('month')} colors={colors} mode={mode} />
-            <FilterChip label="Ultimo año" active={dateFilter === 'year'} onPress={() => changeDateFilter('year')} colors={colors} mode={mode} />
-            <FilterChip label="Recientes" active={sortOrder === 'newest'} onPress={() => changeSortOrder('newest')} colors={colors} mode={mode} />
-            <FilterChip label="Antiguas" active={sortOrder === 'oldest'} onPress={() => changeSortOrder('oldest')} colors={colors} mode={mode} />
-          </ScrollView>
-          <View style={styles.filtersInfoRow}>
-            <Text style={styles.filtersInfoText}>
-              {loading ? 'Actualizando...' : `${assets.length} elementos`} {hasActiveFilters ? 'filtrados' : 'totales'}
-            </Text>
-            {hasActiveFilters ? (
-              <TouchableOpacity
-                onPress={() => {
-                  changeMediaFilter('all');
-                  changeDateFilter('all');
-                  changeSortOrder('newest');
-                }}
-                style={styles.resetFiltersButton}
-              >
-                <Text style={styles.resetFiltersButtonText}>Limpiar filtros</Text>
-              </TouchableOpacity>
-            ) : null}
+          <View style={styles.filtersPanel}>
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.filtersRow}>
+              <FilterChip label="Todo" active={mediaFilter === 'all'} onPress={() => changeMediaFilter('all')} colors={colors} mode={mode} />
+              <FilterChip label="Fotos" active={mediaFilter === 'photo'} onPress={() => changeMediaFilter('photo')} colors={colors} mode={mode} />
+              <FilterChip label="Videos" active={mediaFilter === 'video'} onPress={() => changeMediaFilter('video')} colors={colors} mode={mode} />
+              <FilterChip label="Capturas" active={mediaFilter === 'screenshot'} onPress={() => changeMediaFilter('screenshot')} colors={colors} mode={mode} />
+            </ScrollView>
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={[styles.filtersRow, styles.filtersRowSecondary]}>
+              <FilterChip label="Todo el tiempo" active={dateFilter === 'all'} onPress={() => changeDateFilter('all')} colors={colors} mode={mode} />
+              <FilterChip label="Ultimo mes" active={dateFilter === 'month'} onPress={() => changeDateFilter('month')} colors={colors} mode={mode} />
+              <FilterChip label="Ultimo año" active={dateFilter === 'year'} onPress={() => changeDateFilter('year')} colors={colors} mode={mode} />
+              <FilterChip label="Recientes" active={sortOrder === 'newest'} onPress={() => changeSortOrder('newest')} colors={colors} mode={mode} />
+              <FilterChip label="Antiguas" active={sortOrder === 'oldest'} onPress={() => changeSortOrder('oldest')} colors={colors} mode={mode} />
+            </ScrollView>
+            <View style={styles.filtersInfoRow}>
+              <Text style={styles.filtersInfoText}>
+                {loading ? 'Actualizando...' : `${assets.length} elementos`} {hasActiveFilters ? 'filtrados' : 'totales'}
+              </Text>
+              {hasActiveFilters ? (
+                <TouchableOpacity
+                  onPress={() => {
+                    changeMediaFilter('all');
+                    changeDateFilter('all');
+                    changeSortOrder('newest');
+                  }}
+                  style={styles.resetFiltersButton}
+                >
+                  <Text style={styles.resetFiltersButtonText}>Limpiar filtros</Text>
+                </TouchableOpacity>
+              ) : null}
+            </View>
           </View>
         </View>
       )}
@@ -479,15 +496,28 @@ function GalleryEngine({ isGranted, requestPermission }: any) {
             </TouchableOpacity>
           </View>
         ) : (
-          <PhotoGrid
-            listKey="gallery"
-            resetScrollToken={galleryResetToken}
-            photos={assets}
-            loading={loading}
-            onLoadMore={loadMore}
-            onPhotoPress={handlePhotoPress}
-            onPhotoLongPress={handlePhotoLongPress}
-          />
+          useNativeGrid ? (
+            <NativePhotoGrid
+              style={styles.gridContainer}
+              assets={assets}
+              numColumns={4}
+              selectionMode={selectionMode}
+              selectedIds={selectedIds}
+              onPhotoPress={handlePhotoPress}
+              onPhotoLongPress={handlePhotoLongPress}
+              onEndReached={loadMore}
+            />
+          ) : (
+            <PhotoGrid
+              listKey="gallery"
+              resetScrollToken={galleryResetToken}
+              photos={assets}
+              loading={loading}
+              onLoadMore={loadMore}
+              onPhotoPress={handlePhotoPress}
+              onPhotoLongPress={handlePhotoLongPress}
+            />
+          )
         )}
       </View>
 
@@ -619,27 +649,39 @@ const createStyles = (colors: ThemeColors, mode: 'dark' | 'light') => StyleSheet
     fontWeight: '600',
   },
   filtersContainer: {
-    paddingTop: SPACING.md,
-    paddingBottom: SPACING.sm,
+    paddingTop: SPACING.sm,
+    paddingBottom: SPACING.md,
+    paddingHorizontal: SPACING.sm,
     backgroundColor: colors.surface,
     borderBottomWidth: 1,
     borderBottomColor: colors.border,
   },
+  filtersPanel: {
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: 18,
+    backgroundColor: mode === 'light' ? '#FFF7EA' : colors.surface,
+    overflow: 'hidden',
+  },
   filtersRow: {
     paddingHorizontal: SPACING.md,
-    paddingRight: SPACING.xl,
-    paddingBottom: SPACING.sm,
+    paddingRight: SPACING.lg,
+    paddingTop: SPACING.sm,
+    paddingBottom: SPACING.xs,
     gap: SPACING.sm,
   },
   filtersRowSecondary: {
-    paddingTop: SPACING.xs,
+    paddingTop: 2,
   },
   filtersInfoRow: {
     paddingHorizontal: SPACING.md,
+    paddingTop: SPACING.xs,
     paddingBottom: SPACING.sm,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
+    borderTopWidth: 1,
+    borderTopColor: colors.border,
   },
   filtersInfoText: {
     color: colors.textMuted,
@@ -647,35 +689,38 @@ const createStyles = (colors: ThemeColors, mode: 'dark' | 'light') => StyleSheet
     fontWeight: '600',
   },
   resetFiltersButton: {
-    backgroundColor: mode === 'light' ? 'rgba(122,75,42,0.12)' : 'rgba(255,255,255,0.08)',
+    backgroundColor: mode === 'light' ? 'rgba(122,75,42,0.14)' : 'rgba(255,255,255,0.08)',
+    borderWidth: 1,
+    borderColor: mode === 'light' ? 'rgba(122,75,42,0.2)' : colors.border,
     borderRadius: 999,
-    paddingHorizontal: 10,
-    paddingVertical: 5,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
   },
   resetFiltersButtonText: {
-    color: colors.text,
-    fontSize: 11,
+    color: mode === 'light' ? colors.primary : colors.text,
+    fontSize: 12,
     fontWeight: '700',
   },
   chip: {
     borderRadius: 999,
     borderWidth: 1,
     borderColor: colors.border,
-    backgroundColor: colors.surface,
-    paddingHorizontal: 13,
-    paddingVertical: 9,
+    backgroundColor: mode === 'light' ? '#FFF4E3' : colors.surface,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
   },
   chipActive: {
     borderColor: colors.primary,
-    backgroundColor: mode === 'light' ? 'rgba(122,75,42,0.16)' : '#241934',
+    backgroundColor: mode === 'light' ? 'rgba(122,75,42,0.20)' : '#241934',
   },
   chipText: {
     color: colors.textMuted,
-    fontSize: 13,
+    fontSize: 14,
     fontWeight: '600',
   },
   chipTextActive: {
     color: colors.primary,
+    fontWeight: '700',
   },
   selectionBar: {
     borderBottomWidth: 1,
@@ -734,14 +779,14 @@ const createStyles = (colors: ThemeColors, mode: 'dark' | 'light') => StyleSheet
   },
   emptySubtitle: {
     color: colors.textMuted,
-    fontSize: 14,
+    fontSize: 15,
     textAlign: 'center',
   },
   emptyButton: {
-    marginTop: SPACING.sm,
+    marginTop: SPACING.md,
     backgroundColor: colors.primary,
-    paddingHorizontal: SPACING.lg,
-    paddingVertical: SPACING.sm,
+    paddingHorizontal: SPACING.xl,
+    paddingVertical: SPACING.md,
     borderRadius: 999,
   },
   emptyButtonText: {

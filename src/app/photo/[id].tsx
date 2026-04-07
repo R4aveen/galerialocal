@@ -4,6 +4,7 @@ import { useLocalSearchParams, useRouter } from 'expo-router';
 import { Image } from 'expo-image';
 import { ResizeMode, Video, type AVPlaybackStatus } from 'expo-av';
 import * as FileSystem from 'expo-file-system/legacy';
+import { deleteAssetsBatch } from '../../utils/nativeMediaOps';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import Animated, {
   runOnJS,
@@ -39,7 +40,7 @@ import {
   removeAssetFromGallerySession,
   replaceAssetInGallerySession,
 } from '../../store/gallerySession';
-import { prepareShareUri, sharePreparedUri } from '../../utils/shareMedia';
+import { shareMediaOptions } from '../../utils/shareMedia';
 
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
 
@@ -352,7 +353,7 @@ export default function PhotoDetailScreen() {
 
       const newAsset = await MediaLibrary.createAssetAsync(editedUri);
       try {
-        await MediaLibrary.deleteAssetsAsync([currentAsset.id]);
+        await deleteAssetsBatch([currentAsset.id]);
       } catch {
         // If deletion fails, keep both files and still preserve edited result.
       }
@@ -607,12 +608,16 @@ export default function PhotoDetailScreen() {
 
   const handleShare = async () => {
     try {
-      const shareUri = await prepareShareUri({
-        assetId: currentAsset?.id,
-        fallbackUri: uri,
-        filename: currentAsset?.filename,
-      });
-      await sharePreparedUri(shareUri, 'Compartir archivo');
+      await shareMediaOptions(
+        [
+          {
+            assetId: currentAsset?.id,
+            fallbackUri: uri,
+            filename: currentAsset?.filename,
+          },
+        ],
+        'Compartir archivo'
+      );
     } catch (error) {
       console.error('Error sharing:', error);
       Alert.alert('Error al compartir', 'No se pudo compartir este archivo.');

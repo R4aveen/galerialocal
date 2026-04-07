@@ -8,17 +8,15 @@ import { getAssetIdentityKey } from '../utils/mediaAssets';
 interface Props {
   asset: MediaLibrary.Asset;
   size: number;
+  selectionMode: boolean;
+  dragSelecting: boolean;
   onPress: (asset: MediaLibrary.Asset) => void;
   onLongPress?: (asset: MediaLibrary.Asset) => void;
 }
 
-function PhotoThumbnail({ asset, size, onPress, onLongPress }: Props) {
+function PhotoThumbnail({ asset, size, selectionMode, dragSelecting, onPress, onLongPress }: Props) {
   const selectionKey = getAssetIdentityKey(asset);
-  // Suscripción atómica: El componente SOLO se volverá a renderizar si 
-  // su propio estado de selección cambia o si el modo selección se apaga/enciende globalmente.
-  const isSelected = useSelectionStore(state => state.selectedIds.has(selectionKey));
-  const selectionMode = useSelectionStore(state => state.selectionMode);
-  const dragSelecting = useSelectionStore(state => state.dragSelecting);
+  const isSelected = useSelectionStore((state) => state.selectedIds.has(selectionKey));
 
   return (
     <Pressable 
@@ -56,7 +54,13 @@ function PhotoThumbnail({ asset, size, onPress, onLongPress }: Props) {
 // React.memo evitará que este componente se re-renderice si el Asset o las callbacks onPress no cambian,
 // ignorando los cambios globales de otras fotos.
 export default memo(PhotoThumbnail, (prev, next) => {
-  return prev.asset.id === next.asset.id && prev.asset.uri === next.asset.uri && prev.size === next.size;
+  return (
+    prev.asset.id === next.asset.id
+    && prev.asset.uri === next.asset.uri
+    && prev.size === next.size
+    && prev.selectionMode === next.selectionMode
+    && prev.dragSelecting === next.dragSelecting
+  );
 });
 
 const styles = StyleSheet.create({

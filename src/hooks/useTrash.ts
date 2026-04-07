@@ -1,6 +1,19 @@
 import { useState, useEffect, useCallback } from 'react';
 import * as FileSystem from 'expo-file-system/legacy';
 import * as MediaLibrary from 'expo-media-library';
+import {
+  copyFileNative,
+  copyFilesAndDeleteNative,
+  deleteAssetsBatch,
+  moveAssetsToTrashNative,
+  restoreFilesNative,
+  type NativeCopyAndDeleteRequest,
+  type NativeCopyAndDeleteResult,
+  type NativeMoveToTrashRequest,
+  type NativeMoveToTrashResult,
+  type NativeRestoreRequest,
+  type NativeRestoreResult,
+} from '../utils/nativeMediaOps';
 
 export interface TrashItem {
   id: string;
@@ -19,7 +32,15 @@ interface MoveManyResult {
 
 type ProgressCallback = (processed: number, total: number) => void;
 
+interface RestoreManyResult {
+  restored: number;
+  failed: number;
+  restoredIds: string[];
+}
+
 type TrashListener = (items: TrashItem[], loading: boolean) => void;
+
+const yieldToUI = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
 
 let sharedTrashItems: TrashItem[] = [];
 let sharedTrashLoading = false;
@@ -117,12 +138,41 @@ export function useTrash() {
   }, [loadTrash]);
 
   const buildTrashItem = useCallback(
-    async (asset: MediaLibrary.Asset): Promise<TrashItem> => {
-      const safeFilename = (asset.filename || `${asset.id}.bin`).replace(/[\\/:*?"<>|]/g, '_');
+    async (asset: MediaLibrary.Asset, sourceOverride?: string, alreadyCopied = false): Promise<TrashItem> => {
+      const safeFilename = (asset.filename || `${asset.id}.bin`).replace(/[\/:*?"<>|]/g, '_');
       const newUri = `${trashDir}${asset.id}-${safeFilename}`;
 
-      let copied = false;
+      if (alreadyCopied) {
+        return {
+          id: asset.id,
+          filename: safeFilename,
+          uri: newUri,
+          original_path: asset.uri,
+          deleted_at: Date.now(),
+          recoverable: true,
+        };
+      }
+
+      let copied = alreadyCopied;
       let localUri: string | undefined;
+
+      if (sourceOverride) {
+        if (!alreadyCopied) {
+          const copiedNatively = await copyFileNative(sourceOverride, newUri);
+          if (copiedNatively) {
+            copied = true;
+          }
+        }
+
+        return {
+          id: asset.id,
+          filename: safeFilename,
+          uri: copied ? newUri : '',
+          original_path: asset.uri,
+          deleted_at: Date.now(),
+          recoverable: copied,
+        };
+      }
 
       try {
         const assetInfo = await MediaLibrary.getAssetInfoAsync(asset);
@@ -137,8 +187,7 @@ export function useTrash() {
 
       for (const candidate of copyCandidates) {
         try {
-          await FileSystem.copyAsync({ from: candidate, to: newUri });
-          copied = true;
+          copied = await copyFileNative(candidate, newUri);
           break;
         } catch {
           // Try next candidate.
@@ -169,19 +218,108 @@ export function useTrash() {
 
         let failed = 0;
         const builtItems: TrashItem[] = [];
+        const prepared: Array<{ asset: MediaLibrary.Asset; destinationPath: string }> = [];
 
         for (const asset of assets) {
           try {
-            const trashItem = await buildTrashItem(asset);
-            builtItems.push(trashItem);
+            const safeFilename = (asset.filename || `${asset.id}.bin`).replace(/[\\/:*?"<>|]/g, '_');
+            const destinationPath = `${trashDir}${asset.id}-${safeFilename}`;
+            prepared.push({ asset, destinationPath });
           } catch (error) {
             console.error('Error preparing asset for trash:', asset.id, error);
             failed += 1;
           }
           onProgress?.(builtItems.length + failed, assets.length);
+          if ((builtItems.length + failed) % 6 === 0) {
+            await yieldToUI();
+          }
         }
 
-        for (const item of builtItems) {
+        const nativeMoveResults = await moveAssetsToTrashNative(
+          prepared.map((item) => ({
+            assetId: item.asset.id,
+            destinationPath: item.destinationPath,
+          }))
+        );
+        const nativeResultByAssetId = new Map(
+          nativeMoveResults.map((result) => [result.assetId, result])
+        );
+        const nativeDeletedIds = new Set(
+          nativeMoveResults.filter((result) => result.deleted).map((result) => result.assetId)
+        );
+
+        for (const item of prepared) {
+          try {
+            const nativeResult = nativeResultByAssetId.get(item.asset.id);
+            const alreadyCopied = nativeResult?.copied === true;
+            const sourceOverride = nativeResult?.sourceUri || undefined;
+            const trashItem = await buildTrashItem(item.asset, sourceOverride, alreadyCopied);
+            builtItems.push(trashItem);
+          } catch (error) {
+            console.error('Error preparing asset for trash:', item.asset.id, error);
+            failed += 1;
+          }
+          onProgress?.(builtItems.length + failed, assets.length);
+          if ((builtItems.length + failed) % 6 === 0) {
+            await yieldToUI();
+          }
+        }
+
+        const builtIds = builtItems.map((item) => item.id);
+        let bulkDeleted = false;
+
+        // Fallback for copy+delete in a single native call when moveAssetsToTrash could not finish.
+        const missingMove = prepared.filter((item) => {
+          const result = nativeResultByAssetId.get(item.asset.id);
+          return !result || !(result.copied && result.deleted);
+        });
+        if (missingMove.length > 0) {
+          const fallbackComposite = await copyFilesAndDeleteNative(
+            missingMove.map((item) => ({
+              assetId: item.asset.id,
+              sourceUri: item.asset.uri,
+              destinationPath: item.destinationPath,
+            }))
+          );
+          fallbackComposite.forEach((result) => {
+            if (result.deleted) {
+              nativeDeletedIds.add(result.assetId);
+            }
+          });
+        }
+
+        const idsPendingDelete = builtIds.filter((id) => !nativeDeletedIds.has(id));
+        if (idsPendingDelete.length > 0) {
+          try {
+            bulkDeleted = await deleteAssetsBatch(idsPendingDelete);
+          } catch {
+            bulkDeleted = false;
+          }
+
+          if (bulkDeleted) {
+            idsPendingDelete.forEach((id) => nativeDeletedIds.add(id));
+          }
+        }
+
+        if (!bulkDeleted && idsPendingDelete.length > 0) {
+          console.warn('Bulk delete did not complete for all trash items; skipping per-item retries to avoid repeated system prompts.');
+        }
+
+        // Keep in trash index only assets that were actually deleted from MediaStore.
+        const successfulTrashItems = builtItems.filter((item) => nativeDeletedIds.has(item.id));
+        const failedTrashItems = builtItems.filter((item) => !nativeDeletedIds.has(item.id));
+
+        // Roll back copied files for assets that were not deleted to avoid inconsistent state.
+        for (const failedItem of failedTrashItems) {
+          failed += 1;
+          try {
+            await FileSystem.deleteAsync(failedItem.uri, { idempotent: true });
+          } catch {
+            // Ignore rollback cleanup failures.
+          }
+        }
+
+        for (const item of successfulTrashItems) {
           itemsById.set(item.id, item);
         }
 
@@ -192,32 +330,10 @@ export function useTrash() {
         sharedTrashItems = nextItems;
         notifyTrashListeners();
 
-        const builtIds = builtItems.map((item) => item.id);
-        let bulkDeleted = false;
-
-        if (builtIds.length > 0) {
-          try {
-            const ok = await MediaLibrary.deleteAssetsAsync(builtIds);
-            bulkDeleted = ok;
-          } catch {
-            bulkDeleted = false;
-          }
-        }
-
-        if (!bulkDeleted) {
-          for (const item of builtItems) {
-            try {
-              await MediaLibrary.deleteAssetsAsync([item.id]);
-            } catch (deleteError) {
-              console.warn('Could not delete asset from media library, but moved to trash:', item.id, deleteError);
-            }
-          }
-        }
-
         onProgress?.(assets.length, assets.length);
 
         await loadTrash();
-        return { moved: builtItems.length, failed, movedIds: builtItems.map((item) => item.id) };
+        return { moved: successfulTrashItems.length, failed, movedIds: successfulTrashItems.map((item) => item.id) };
       } catch (error) {
         console.error('Error moving many assets to trash:', error);
         return { moved: 0, failed: assets.length, movedIds: [] };
@@ -240,37 +356,99 @@ export function useTrash() {
     });
   }, [trashItems]);
 
-  const restoreFromTrash = async (item: TrashItem) => {
+  const restoreManyFromTrash = async (
+    itemsToRestore: TrashItem[],
+    onProgress?: ProgressCallback
+  ): Promise<RestoreManyResult> => {
+    if (itemsToRestore.length === 0) {
+      return { restored: 0, failed: 0, restoredIds: [] };
+    }
+
     try {
-      if (!item.recoverable || !item.uri) {
-        console.warn('Item is not recoverable because original file was not copied to app storage');
-        return false;
+      const items = await readTrashItems();
+      const itemsById = new Map(items.map((entry) => [entry.id, entry]));
+      const restorable = itemsToRestore.filter((item) => item.recoverable && item.uri);
+
+      const nativeResults = await restoreFilesNative(
+        restorable.map((item) => ({
+          itemId: item.id,
+          sourcePath: item.uri,
+          filename: item.filename,
+        }))
+      );
+      const nativeById = new Map(nativeResults.map((result) => [result.itemId, result]));
+
+      let restored = 0;
+      let failed = 0;
+      const restoredIds: string[] = [];
+
+      for (const item of itemsToRestore) {
+        const existing = itemsById.get(item.id);
+        if (!existing) {
+          failed += 1;
+          onProgress?.(restored + failed, itemsToRestore.length);
+          continue;
+        }
+
+        if (!existing.recoverable || !existing.uri) {
+          failed += 1;
+          onProgress?.(restored + failed, itemsToRestore.length);
+          continue;
+        }
+
+        const wasRestored = nativeById.get(existing.id)?.restored === true;
+
+        if (!wasRestored) {
+          failed += 1;
+          onProgress?.(restored + failed, itemsToRestore.length);
+          if ((restored + failed) % 6 === 0) {
+            await yieldToUI();
+          }
+          continue;
+        }
+
+        itemsById.delete(existing.id);
+        restored += 1;
+        restoredIds.push(existing.id);
+
+        try {
+          await FileSystem.deleteAsync(existing.uri, { idempotent: true });
+        } catch {
+          // If temp file cleanup fails, keep restored result and continue.
+        }
+
+        onProgress?.(restored + failed, itemsToRestore.length);
+        if ((restored + failed) % 6 === 0) {
+          await yieldToUI();
+        }
       }
 
-      // En Android recientes se restaura creando un nuevo asset en la librería.
-      await MediaLibrary.createAssetAsync(item.uri);
-
-      const items = await readTrashItems();
-      const nextItems = items.filter((trashItem) => trashItem.id !== item.id);
+      const nextItems = Array.from(itemsById.values()).sort((a, b) => b.deleted_at - a.deleted_at);
       await writeTrashItems(nextItems);
-      await FileSystem.deleteAsync(item.uri, { idempotent: true });
-
       sharedTrashItems = nextItems;
       notifyTrashListeners();
-
       await loadTrash();
-      return true;
+
+      return { restored, failed, restoredIds };
     } catch (error) {
-      console.error('Error restoring:', error);
-      return false;
+      console.error('Error restoring many from trash:', error);
+      return { restored: 0, failed: itemsToRestore.length, restoredIds: [] };
     }
+  };
+
+  const restoreFromTrash = async (item: TrashItem) => {
+    const result = await restoreManyFromTrash([item]);
+    return result.restored === 1;
   };
 
   const deletePermanently = async (item: TrashItem) => {
     try {
       // Try to remove from the system gallery first.
       // If this step fails, we keep the item in trash so the user can retry.
-      await MediaLibrary.deleteAssetsAsync([item.id]);
+      const deleted = await deleteAssetsBatch([item.id]);
+      if (!deleted) {
+        return false;
+      }
 
       const items = await readTrashItems();
       const nextItems = items.filter((trashItem) => trashItem.id !== item.id);
@@ -299,7 +477,7 @@ export function useTrash() {
       const ids = items.map(item => item.id);
       if (ids.length > 0) {
         try {
-          await MediaLibrary.deleteAssetsAsync(ids);
+          await deleteAssetsBatch(ids);
         } catch (error) {
           console.warn('Could not cleanly delete all assets from media library during emptyTrash', error);
         }
@@ -333,6 +511,7 @@ export function useTrash() {
     moveToTrash,
     moveManyToTrash,
     restoreFromTrash,
+    restoreManyFromTrash,
     deletePermanently,
     emptyTrash,
     refreshTrash: loadTrash,

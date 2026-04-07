@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import * as MediaLibrary from 'expo-media-library';
 import * as FileSystemLegacy from 'expo-file-system/legacy';
+import GaleriaMedia from '../../modules/galeria-media';
 
 interface StorageStats {
   loading: boolean;
@@ -8,6 +9,9 @@ interface StorageStats {
   freeBytes: number;
   mediaBytes: number;
   appBytes: number;
+  cacheBytes: number;
+  trimCache: (maxBytes?: number, maxAgeMs?: number) => Promise<number>;
+  clearCache: () => Promise<number>;
 }
 
 const MEDIA_PAGE_SIZE = 500;
@@ -116,7 +120,39 @@ export function useStorageStats() {
     freeBytes: 0,
     mediaBytes: 0,
     appBytes: 0,
+    cacheBytes: 0,
+    trimCache: async () => 0,
+    clearCache: async () => 0,
   });
+
+  const refreshStats = async () => {
+    const [nativeStats, mediaBytes] = await Promise.all([
+      GaleriaMedia.getAppStorageStatsAsync().catch(() => ({ totalBytes: 0, freeBytes: 0, cacheBytes: 0, appBytes: 0 })),
+      getMediaStorageBytes().catch(() => 0),
+    ]);
+
+    setStats((prev) => ({
+      ...prev,
+      loading: false,
+      totalBytes: Number(nativeStats.totalBytes || 0),
+      freeBytes: Number(nativeStats.freeBytes || 0),
+      mediaBytes: Number(mediaBytes || 0),
+      appBytes: Number(nativeStats.appBytes || 0),
+      cacheBytes: Number(nativeStats.cacheBytes || 0),
+    }));
+  };
+
+  const trimCache = async (maxBytes = 220 * 1024 * 1024, maxAgeMs = 72 * 60 * 60 * 1000) => {
+    const result = await GaleriaMedia.trimAppCacheAsync({ maxBytes, maxAgeMs }).catch(() => ({ freedBytes: 0 }));
+    await refreshStats();
+    return Number((result as any).freedBytes || 0);
+  };
+
+  const clearCache = async () => {
+    const result = await GaleriaMedia.clearAppCacheAsync().catch(() => ({ freedBytes: 0 }));
+    await refreshStats();
+    return Number((result as any).freedBytes || 0);
+  };
 
   useEffect(() => {
     let cancelled = false;
@@ -125,21 +161,22 @@ export function useStorageStats() {
       setStats((prev) => ({ ...prev, loading: true }));
 
       try {
-        const [totalBytes, freeBytes, mediaBytes, appBytes] = await Promise.all([
-          FileSystemLegacy.getTotalDiskCapacityAsync().catch(() => 0),
-          FileSystemLegacy.getFreeDiskStorageAsync().catch(() => 0),
+        const [nativeStats, mediaBytes] = await Promise.all([
+          GaleriaMedia.getAppStorageStatsAsync().catch(() => ({ totalBytes: 0, freeBytes: 0, cacheBytes: 0, appBytes: 0 })),
           getMediaStorageBytes().catch(() => 0),
-          getAppStorageBytes().catch(() => 0),
         ]);
 
         if (cancelled) return;
 
         setStats({
           loading: false,
-          totalBytes: Number(totalBytes || 0),
-          freeBytes: Number(freeBytes || 0),
+          totalBytes: Number((nativeStats as any).totalBytes || 0),
+          freeBytes: Number((nativeStats as any).freeBytes || 0),
           mediaBytes: Number(mediaBytes || 0),
-          appBytes: Number(appBytes || 0),
+          appBytes: Number((nativeStats as any).appBytes || 0),
+          cacheBytes: Number((nativeStats as any).cacheBytes || 0),
+          trimCache,
+          clearCache,
         });
       } catch {
         if (!cancelled) {
@@ -155,7 +192,7 @@ export function useStorageStats() {
     };
   }, []);
 
-  return useMemo(() => stats, [stats]);
+  return useMemo(() => ({ ...stats, trimCache, clearCache }), [stats]);
 }
 
 export default useStorageStats;

@@ -1,5 +1,5 @@
 import React from 'react';
-import { View, Text, StyleSheet, TouchableOpacity } from 'react-native';
+import { Alert, View, Text, StyleSheet, TouchableOpacity } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { DrawerContentScrollView, DrawerItemList } from '@react-navigation/drawer';
 import { SPACING } from '../constants/theme';
@@ -21,10 +21,19 @@ const formatBytes = (bytes: number) => {
 
 export default function CustomDrawerContent(props: any) {
   const { trashItems } = useTrash();
-  const safeUseStorageStats = typeof storageStatsModule === 'function'
+  const safeUseStorageStats: typeof storageStatsModule = typeof storageStatsModule === 'function'
     ? storageStatsModule
-    : (() => ({ loading: false, totalBytes: 0, freeBytes: 0, mediaBytes: 0, appBytes: 0 }));
-  const { loading, totalBytes, freeBytes, mediaBytes, appBytes } = safeUseStorageStats();
+    : (() => ({
+      loading: false,
+      totalBytes: 0,
+      freeBytes: 0,
+      mediaBytes: 0,
+      appBytes: 0,
+      cacheBytes: 0,
+      trimCache: async () => 0,
+      clearCache: async () => 0,
+    }));
+  const { loading, totalBytes, freeBytes, mediaBytes, appBytes, cacheBytes, trimCache } = safeUseStorageStats();
   const { colors, mode, toggleMode } = useAppTheme();
   const styles = React.useMemo(() => createStyles(colors), [colors]);
 
@@ -49,10 +58,24 @@ export default function CustomDrawerContent(props: any) {
               <Text style={styles.storageLine}>Total equipo: {formatBytes(totalBytes)}</Text>
               <Text style={styles.storageLine}>Imagenes y videos: {formatBytes(mediaBytes)}</Text>
               <Text style={styles.storageLine}>Datos de la app: {formatBytes(appBytes)}</Text>
+              <Text style={styles.storageLine}>Cache nativa: {formatBytes(cacheBytes || 0)}</Text>
               <Text style={styles.storageLine}>Libre: {formatBytes(freeBytes)}</Text>
             </>
           )}
         </View>
+        <TouchableOpacity
+          style={styles.themeButton}
+          onPress={async () => {
+            try {
+              const freed = await trimCache(220 * 1024 * 1024, 72 * 60 * 60 * 1000);
+              Alert.alert('Cache optimizada', `Se liberaron ${formatBytes(freed)}.`);
+            } catch {
+              Alert.alert('Error', 'No se pudo optimizar la cache.');
+            }
+          }}
+        >
+          <Text style={styles.themeButtonText}>Optimizar cache</Text>
+        </TouchableOpacity>
         <TouchableOpacity style={styles.themeButton} onPress={toggleMode}>
           <Text style={styles.themeButtonText}>
             {mode === 'dark' ? 'Cambiar a modo claro' : 'Cambiar a modo oscuro'}

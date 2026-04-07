@@ -1,13 +1,10 @@
 import { GridRow, GridSkeletonRow, buildGridModel, HEADER_HEIGHT } from "./PhotoGridComponents/GridBuilder";
 import MonthHeader from './PhotoGridComponents/MonthHeader';
 import AssetRow from './PhotoGridComponents/AssetRow';
-import { TimelineRail } from './PhotoGridComponents/TimelineRail';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Dimensions, StyleSheet, View, ActivityIndicator, Text, RefreshControl } from 'react-native';
 import { FlashList, type FlashListRef } from '@shopify/flash-list';
 import * as MediaLibrary from 'expo-media-library';
-import PhotoThumbnail from './PhotoThumbnail';
-import { getSafeAssetTimestamp } from '../utils/mediaDate';
 import { useSelectionStore } from '../store/useSelectionStore';
 import { useAppTheme } from '../theme/AppThemeContext';
 import { getAssetIdentityKey } from '../utils/mediaAssets';
@@ -46,6 +43,7 @@ function PhotoGrid({
   const listRef = useRef<FlashListRef<GridRow> | null>(null);
   const containerRef = useRef<View | null>(null);
   const dragSelecting = useSelectionStore(state => state.dragSelecting);
+  const selectionMode = useSelectionStore(state => state.selectionMode);
   const hideOverlayTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const autoScrollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const autoScrollDirRef = useRef<-1 | 0 | 1>(0);
@@ -72,7 +70,11 @@ function PhotoGrid({
   const [activeYear, setActiveYear] = useState('');
 
   const scrollOffsetRef = useRef(0);
-  const lastDragSelectedIdRef = useRef<string | null>(null);
+  const overlayLabelRef = useRef('');
+  const activeYearRef = useRef('');
+  const lastDragSelectedIndexRef = useRef<number | null>(null);
+  const pendingDragPointRef = useRef<{ x: number; y: number } | null>(null);
+  const dragRafRef = useRef<number | null>(null);
 
   const toContainerPoint = useCallback((touch: any) => {
     const pageX = Number(touch?.pageX ?? 0);
@@ -89,6 +91,12 @@ function PhotoGrid({
   }, [loading]);
 
   const gridModel = useMemo(() => buildGridModel(photos, COLUMNS, ROW_HEIGHT), [photos]);
+  const orderedAssetIds = useMemo(() => photos.map((asset) => getAssetIdentityKey(asset as any)), [photos]);
+  const orderedIndexById = useMemo(() => {
+    const map = new Map<string, number>();
+    orderedAssetIds.forEach((id, idx) => map.set(id, idx));
+    return map;
+  }, [orderedAssetIds]);
 
   const hitTestAssetId = useCallback(
     (locationX: number, locationY: number, listRows: GridRow[]) => {
@@ -131,7 +139,7 @@ function PhotoGrid({
     // Delay to avoid triggering underlying Pressable onPress when the finger is released.
     setTimeout(() => {
       useSelectionStore.getState().endDragSelect();
-      lastDragSelectedIdRef.current = null;
+      lastDragSelectedIndexRef.current = null;
       dragTouchActivatedRef.current = false;
     }, 0);
   }, []);
@@ -214,6 +222,34 @@ function PhotoGrid({
     }, 460);
   }, [isScrubbing]);
 
+  const setOverlayLabelIfChanged = useCallback((nextLabel: string) => {
+    if (!nextLabel || overlayLabelRef.current === nextLabel) return;
+    overlayLabelRef.current = nextLabel;
+    setOverlayLabel(nextLabel);
+  }, []);
+
+  const setOverlayLabelRefOnly = useCallback((nextLabel: string) => {
+    if (!nextLabel || overlayLabelRef.current === nextLabel) return;
+    overlayLabelRef.current = nextLabel;
+  }, []);
+
+  const setActiveYearIfChanged = useCallback((nextYear: string) => {
+    if (!nextYear || activeYearRef.current === nextYear) return;
+    activeYearRef.current = nextYear;
+    setActiveYear(nextYear);
+  }, []);
+
+  const setActiveYearRefOnly = useCallback((nextYear: string) => {
+    if (!nextYear || activeYearRef.current === nextYear) return;
+    activeYearRef.current = nextYear;
+  }, []);
+
+  const setActiveMonthKeyIfChanged = useCallback((nextMonthKey: string | null) => {
+    if (!nextMonthKey || activeMonthRef.current === nextMonthKey) return;
+    activeMonthRef.current = nextMonthKey;
+    setActiveMonthKey(nextMonthKey);
+  }, []);
+
   const alignToTopNow = useCallback(() => {
     listRef.current?.scrollToOffset?.({ offset: 0, animated: false });
   }, []);
@@ -229,6 +265,8 @@ function PhotoGrid({
 
     appliedResetTokenRef.current = resetScrollToken;
     activeMonthRef.current = null;
+    overlayLabelRef.current = '';
+    activeYearRef.current = '';
     lastScrubMonthKeyRef.current = null;
     setActiveMonthKey(null);
     setActiveYear('');
@@ -263,10 +301,20 @@ function PhotoGrid({
     if (hideOverlayTimerRef.current) {
       clearTimeout(hideOverlayTimerRef.current);
     }
-    setRailVisible(true);
-    setShowDateOverlay(true);
+    // Sync visual state from refs only when timeline/overlay is actually shown.
+    if (overlayLabelRef.current) {
+      setOverlayLabel((prev) => (prev === overlayLabelRef.current ? prev : overlayLabelRef.current));
+    }
+    if (activeYearRef.current) {
+      setActiveYear((prev) => (prev === activeYearRef.current ? prev : activeYearRef.current));
+    }
+    if (activeMonthRef.current) {
+      setActiveMonthKey((prev) => (prev === activeMonthRef.current ? prev : activeMonthRef.current));
+    }
+    setRailVisible((prev) => (prev ? prev : true));
+    setShowDateOverlay((prev) => (prev ? prev : true));
     if (scrubbing) {
-      setIsScrubbing(true);
+      setIsScrubbing((prev) => (prev ? prev : true));
     }
   }, []);
 
@@ -276,18 +324,17 @@ function PhotoGrid({
     if (anchorIndex == null || !anchor) return;
     if (activeMonthRef.current === monthKey) return;
 
-    activeMonthRef.current = monthKey;
-    setActiveMonthKey(monthKey);
-    setActiveYear(anchor.year);
-    setOverlayLabel(anchor.label);
-    setShowDateOverlay(true);
+    setActiveMonthKeyIfChanged(monthKey);
+    setActiveYearIfChanged(anchor.year);
+    setOverlayLabelIfChanged(anchor.label);
+    setShowDateOverlay((prev) => (prev ? prev : true));
     try {
       listRef.current?.scrollToIndex({ index: anchorIndex, animated, viewPosition: 0 });
     } catch {
       const offset = gridModel.offsetByIndex.get(anchorIndex) || 0;
       listRef.current?.scrollToOffset?.({ offset, animated });
     }
-  }, [gridModel.monthAnchorIndexByKey, gridModel.monthAnchors]);
+  }, [gridModel.monthAnchorIndexByKey, gridModel.monthAnchors, gridModel.offsetByIndex, setActiveMonthKeyIfChanged, setActiveYearIfChanged, setOverlayLabelIfChanged]);
 
   const yearAnchorFromLocation = useCallback((locationY: number) => {
     if (gridModel.yearAnchors.length <= 1 || railHeight <= 0) return null;
@@ -300,8 +347,8 @@ function PhotoGrid({
     const nextAnchor = yearAnchorFromLocation(locationY);
     if (!nextAnchor) return;
 
-    setActiveYear(nextAnchor.year);
-    setOverlayLabel(nextAnchor.label);
+    setActiveYearIfChanged(nextAnchor.year);
+    setOverlayLabelIfChanged(nextAnchor.label);
 
     const now = Date.now();
     if (lastScrubMonthKeyRef.current === nextAnchor.monthKey && now - lastScrubJumpAtRef.current < SCRUB_THROTTLE_MS) {
@@ -317,7 +364,7 @@ function PhotoGrid({
     if (nextAnchor.monthKey !== activeMonthRef.current) {
       jumpToMonth(nextAnchor.monthKey, false);
     }
-  }, [jumpToMonth, yearAnchorFromLocation]);
+  }, [jumpToMonth, setActiveYearIfChanged, setOverlayLabelIfChanged, yearAnchorFromLocation]);
 
   const activeMonthIndex = useMemo(() => {
     if (!activeMonthKey) return -1;
@@ -345,30 +392,52 @@ function PhotoGrid({
 
     const nextLabel = gridModel.labelByIndex[minVisibleIndex] || '';
     const nextMonthKey = gridModel.monthKeyByIndex[minVisibleIndex] || null;
-    if (nextLabel) {
-      setOverlayLabel(nextLabel);
+    const shouldUpdateVisualState = showDateOverlay || railVisible || isScrubbing;
+
+    if (shouldUpdateVisualState) {
+      setOverlayLabelIfChanged(nextLabel);
+    } else {
+      setOverlayLabelRefOnly(nextLabel);
     }
+
     if (nextMonthKey) {
-      activeMonthRef.current = nextMonthKey;
-      setActiveMonthKey(nextMonthKey);
-      setActiveYear(nextMonthKey.split('-')[0] || '');
+      if (shouldUpdateVisualState) {
+        setActiveMonthKeyIfChanged(nextMonthKey);
+        setActiveYearIfChanged(nextMonthKey.split('-')[0] || '');
+      } else {
+        activeMonthRef.current = nextMonthKey;
+        setActiveYearRefOnly(nextMonthKey.split('-')[0] || '');
+      }
     }
-  }, [gridModel.labelByIndex, gridModel.monthKeyByIndex]);
+  }, [
+    gridModel.labelByIndex,
+    gridModel.monthKeyByIndex,
+    isScrubbing,
+    railVisible,
+    setActiveMonthKeyIfChanged,
+    setActiveYearIfChanged,
+    setActiveYearRefOnly,
+    setOverlayLabelIfChanged,
+    setOverlayLabelRefOnly,
+    showDateOverlay,
+  ]);
 
   const beginDragSelectingAt = useCallback(
     (x: number, y: number) => {
       const rows = listRowsRef.current;
       const id = hitTestAssetId(x, y, rows);
       if (!id) return;
+      const startIndex = orderedIndexById.get(id);
+      if (startIndex == null) return;
 
       const state = useSelectionStore.getState();
       if (!state.selectionMode) {
         state.setSelectionMode(true);
       }
-      state.beginDragSelect(id);
-      lastDragSelectedIdRef.current = id;
+      state.beginDragSelect(id, startIndex, orderedAssetIds);
+      lastDragSelectedIndexRef.current = startIndex;
     },
-    [hitTestAssetId]
+    [hitTestAssetId, orderedAssetIds, orderedIndexById]
   );
 
   const updateDragSelectingAt = useCallback(
@@ -382,12 +451,32 @@ function PhotoGrid({
 
       const id = hitTestAssetId(x, y, rows);
       if (!id) return;
-      if (lastDragSelectedIdRef.current === id) return;
-      lastDragSelectedIdRef.current = id;
-      state.applyDragSelect(id);
+      const currentIndex = orderedIndexById.get(id);
+      if (currentIndex == null) return;
+      if (lastDragSelectedIndexRef.current === currentIndex) return;
+      lastDragSelectedIndexRef.current = currentIndex;
+      state.applyDragSelect(currentIndex);
     },
-    [hitTestAssetId, updateAutoScrollAt]
+    [hitTestAssetId, orderedIndexById, updateAutoScrollAt]
   );
+
+  const flushDragMove = useCallback(() => {
+    dragRafRef.current = null;
+    const point = pendingDragPointRef.current;
+    if (!point) return;
+    pendingDragPointRef.current = null;
+    updateDragSelectingAt(point.x, point.y);
+  }, [updateDragSelectingAt]);
+
+  useEffect(() => {
+    return () => {
+      if (dragRafRef.current != null) {
+        cancelAnimationFrame(dragRafRef.current);
+        dragRafRef.current = null;
+      }
+      pendingDragPointRef.current = null;
+    };
+  }, []);
 
   const handleTouchStart = useCallback((event: any) => {
     const touch = event?.nativeEvent?.touches?.[0];
@@ -404,7 +493,7 @@ function PhotoGrid({
       if (!point) return;
       dragTouchActivatedRef.current = true;
       beginDragSelectingAt(point.x, point.y);
-    }, state.selectionMode ? 160 : 280);
+    }, state.selectionMode ? 90 : 220);
   }, [beginDragSelectingAt, clearDragActivationTimer, toContainerPoint]);
 
   const handleTouchMove = useCallback((event: any) => {
@@ -427,16 +516,76 @@ function PhotoGrid({
       return;
     }
 
-    updateDragSelectingAt(x, y);
-  }, [clearDragActivationTimer, toContainerPoint, updateDragSelectingAt]);
+    pendingDragPointRef.current = { x, y };
+    if (dragRafRef.current == null) {
+      dragRafRef.current = requestAnimationFrame(flushDragMove);
+    }
+  }, [clearDragActivationTimer, flushDragMove, toContainerPoint]);
 
   const finishTouchDrag = useCallback(() => {
     clearDragActivationTimer();
     dragTouchStartRef.current = null;
     if (!dragTouchActivatedRef.current) return;
+
+    if (dragRafRef.current != null) {
+      cancelAnimationFrame(dragRafRef.current);
+      dragRafRef.current = null;
+    }
+    const point = pendingDragPointRef.current;
+    if (point) {
+      pendingDragPointRef.current = null;
+      updateDragSelectingAt(point.x, point.y);
+    }
+
     stopAutoScroll();
     endDragSelectDelayed();
-  }, [clearDragActivationTimer, endDragSelectDelayed, stopAutoScroll]);
+  }, [clearDragActivationTimer, endDragSelectDelayed, stopAutoScroll, updateDragSelectingAt]);
+
+  const keyExtractor = useCallback((item: GridRow) => item.key, []);
+
+  const handleListScroll = useCallback((event: any) => {
+    scrollOffsetRef.current = event.nativeEvent.contentOffset.y;
+  }, []);
+
+  const footerComponent = useMemo(
+    () => (
+      loading ? (
+        <View style={styles.footer}>
+          <ActivityIndicator color={colors.primary} />
+        </View>
+      ) : null
+    ),
+    [colors.primary, loading, styles.footer]
+  );
+
+  const renderGridItem = useCallback(({ item }: { item: GridRow }) => {
+    if (item.type === 'header') {
+      return <MonthHeader label={item.label} />;
+    }
+
+    if (item.type === 'skeleton') {
+      return (
+        <View style={[styles.row, { height: ITEM_SIZE }]}>
+          {Array.from({ length: COLUMNS }).map((_, idx) => (
+            <View key={`skeleton-cell-${item.key}-${idx}`} style={[styles.cell, styles.skeletonCell]} />
+          ))}
+        </View>
+      );
+    }
+
+    return (
+      <AssetRow
+        itemKey={item.key}
+        assets={item.assets}
+        columns={COLUMNS}
+        itemSize={ITEM_SIZE}
+        selectionMode={selectionMode}
+        dragSelecting={dragSelecting}
+        onPhotoPress={onPhotoPress}
+        onPhotoLongPress={onPhotoLongPress}
+      />
+    );
+  }, [dragSelecting, onPhotoLongPress, onPhotoPress, selectionMode, styles.cell, styles.row, styles.skeletonCell]);
 
   return (
       <View
@@ -455,10 +604,6 @@ function PhotoGrid({
         onTouchEnd={finishTouchDrag}
         onTouchCancel={finishTouchDrag}
         onMoveShouldSetResponderCapture={() => dragTouchActivatedRef.current}
-        onResponderMove={(event) => {
-          if (!dragTouchActivatedRef.current) return;
-          handleTouchMove(event);
-        }}
         onResponderRelease={finishTouchDrag}
         onResponderTerminate={finishTouchDrag}
       >
@@ -485,44 +630,17 @@ function PhotoGrid({
             nextLayout.size = ROW_HEIGHT;
           }}
           getItemType={(item) => item.type}
-          drawDistance={SCREEN_WIDTH * 2}
-          initialNumToRender={36}
-          maxToRenderPerBatch={24}
-          renderItem={({ item }) => {
-            if (item.type === 'header') {
-              return <MonthHeader label={item.label} />;
-            }
-
-            if (item.type === 'skeleton') {
-              return (
-                <View style={[styles.row, { height: ITEM_SIZE }]}>
-                  {Array.from({ length: COLUMNS }).map((_, idx) => (
-                    <View key={`skeleton-cell-${item.key}-${idx}`} style={[styles.cell, styles.skeletonCell]} />
-                  ))}
-                </View>
-              );
-            }
-
-            return (
-              <AssetRow
-                itemKey={item.key}
-                assets={item.assets}
-                columns={COLUMNS}
-                itemSize={ITEM_SIZE}
-                onPhotoPress={onPhotoPress}
-                onPhotoLongPress={onPhotoLongPress}
-              />
-            );
-          }}
-          keyExtractor={(item) => item.key}
+          drawDistance={SCREEN_WIDTH * 1.2}
+          initialNumToRender={20}
+          maxToRenderPerBatch={12}
+          renderItem={renderGridItem}
+          keyExtractor={keyExtractor}
           onEndReached={onLoadMore}
           onEndReachedThreshold={4}
-          removeClippedSubviews={false}
+          removeClippedSubviews
           scrollEnabled={!dragSelecting}
           scrollEventThrottle={16}
-          onScroll={(event) => {
-            scrollOffsetRef.current = event.nativeEvent.contentOffset.y;
-          }}
+          onScroll={handleListScroll}
           updateCellsBatchingPeriod={30}
           onViewableItemsChanged={onViewableItemsChanged}
           onScrollBeginDrag={() => beginTimelineInteraction(false)}
@@ -535,13 +653,7 @@ function PhotoGrid({
             setIsScrubbing(false);
             scheduleOverlayHide();
           }}
-          ListFooterComponent={() => (
-            loading ? (
-              <View style={styles.footer}>
-                <ActivityIndicator color={colors.primary} />
-              </View>
-            ) : null
-          )}
+          ListFooterComponent={footerComponent}
           {...({} as any)}
         />
 
@@ -629,16 +741,6 @@ const createStyles = (colors: { background: string; primary: string; text: strin
   footer: {
     padding: 20,
     alignItems: 'center',
-  },
-  sectionHeader: {
-    color: colors.text,
-    fontSize: 12,
-    fontWeight: '800',
-    textTransform: 'capitalize',
-    letterSpacing: 0.3,
-    paddingHorizontal: 10,
-    paddingVertical: 8,
-    backgroundColor: 'rgba(0,0,0,0.38)',
   },
   row: {
     flexDirection: 'row',

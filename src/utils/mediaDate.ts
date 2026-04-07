@@ -1,8 +1,8 @@
 import * as MediaLibrary from 'expo-media-library';
 import { getPersistedTimestamps, upsertPersistedTimestamps } from '../db/mediaTimestampCache';
+import { getAssetIdentityKey } from './mediaAssets';
 import {
   getFromJsonCache,
-  setInJsonCache,
   setInJsonCacheSingle,
   getAllFromJsonCache,
   initializeJsonCache,
@@ -15,6 +15,8 @@ const pendingPersist = new Map<string, number>();
 let persistTimer: ReturnType<typeof setTimeout> | null = null;
 let persistRunning = false;
 let jsonCacheInitialized = false;
+
+const getTimestampCacheKey = (asset: MediaLibrary.Asset) => getAssetIdentityKey(asset);
 
 const normalizeTimestamp = (value?: number | null) => {
   'worklet';
@@ -99,6 +101,11 @@ const computeTimestamp = (asset: MediaLibrary.Asset) => {
   return MIN_REASONABLE_TS;
 };
 
+const getNormalizedCachedTimestamp = (value?: number | null) => {
+  const normalized = normalizeTimestamp(value);
+  return normalized ?? null;
+};
+
 export const hydrateTimestampCache = async (assets: MediaLibrary.Asset[]) => {
   if (assets.length === 0) return;
 
@@ -110,70 +117,111 @@ export const hydrateTimestampCache = async (assets: MediaLibrary.Asset[]) => {
     // Populate in-memory cache from JSON
     const fromJson = getAllFromJsonCache();
     fromJson.forEach((ts, id) => {
-      if (!timestampCache.has(id)) {
-        timestampCache.set(id, ts);
+      const normalized = getNormalizedCachedTimestamp(ts);
+      if (normalized != null && !timestampCache.has(id)) {
+        timestampCache.set(id, normalized);
       }
     });
   }
 
   const missing = assets.filter((asset) => {
-    if (timestampCache.has(asset.id)) return false;
-    const fromJson = getFromJsonCache(asset.id);
+    const cacheKey = getTimestampCacheKey(asset);
+    const legacyKey = asset.id;
+
+    if (timestampCache.has(cacheKey)) return false;
+    const fromJson = getNormalizedCachedTimestamp(getFromJsonCache(cacheKey));
     if (fromJson != null) {
-      timestampCache.set(asset.id, fromJson);
+      timestampCache.set(cacheKey, fromJson);
       return false;
     }
+
+    const fromLegacyJson = getNormalizedCachedTimestamp(getFromJsonCache(legacyKey));
+    if (fromLegacyJson != null) {
+      timestampCache.set(cacheKey, fromLegacyJson);
+      setInJsonCacheSingle(cacheKey, fromLegacyJson);
+      queuePersistTimestamp(cacheKey, fromLegacyJson);
+      return false;
+    }
+
     return true;
   });
 
   if (missing.length === 0) return;
 
   try {
-    // Try to load from SQLite
-    const persisted = await getPersistedTimestamps(missing.map((asset) => asset.id));
+    // Try identity-key first and legacy id as compatibility fallback.
+    const identityKeys = missing.map((asset) => getTimestampCacheKey(asset));
+    const legacyKeys = missing.map((asset) => asset.id);
+    const persisted = await getPersistedTimestamps(Array.from(new Set([...identityKeys, ...legacyKeys])));
+
     missing.forEach((asset) => {
-      const fromDb = persisted.get(asset.id);
-      if (fromDb != null) {
-        timestampCache.set(asset.id, fromDb);
-        setInJsonCacheSingle(asset.id, fromDb);
+      const cacheKey = getTimestampCacheKey(asset);
+      const legacyKey = asset.id;
+
+      const fromIdentityDb = getNormalizedCachedTimestamp(persisted.get(cacheKey));
+      if (fromIdentityDb != null) {
+        timestampCache.set(cacheKey, fromIdentityDb);
+        setInJsonCacheSingle(cacheKey, fromIdentityDb);
+        return;
+      }
+
+      const fromLegacyDb = getNormalizedCachedTimestamp(persisted.get(legacyKey));
+      if (fromLegacyDb != null) {
+        timestampCache.set(cacheKey, fromLegacyDb);
+        setInJsonCacheSingle(cacheKey, fromLegacyDb);
+        queuePersistTimestamp(cacheKey, fromLegacyDb);
         return;
       }
 
       const computed = computeTimestamp(asset);
-      timestampCache.set(asset.id, computed);
-      setInJsonCacheSingle(asset.id, computed);
-      queuePersistTimestamp(asset.id, computed);
+      timestampCache.set(cacheKey, computed);
+      setInJsonCacheSingle(cacheKey, computed);
+      queuePersistTimestamp(cacheKey, computed);
     });
   } catch (error) {
     // If SQLite read fails, fall back to pure in-memory behavior
     missing.forEach((asset) => {
+      const cacheKey = getTimestampCacheKey(asset);
       const computed = computeTimestamp(asset);
-      timestampCache.set(asset.id, computed);
-      setInJsonCacheSingle(asset.id, computed);
+      timestampCache.set(cacheKey, computed);
+      setInJsonCacheSingle(cacheKey, computed);
     });
   }
 };
 
 export const getSafeAssetTimestamp = (asset: MediaLibrary.Asset) => {
   'worklet';
+  const cacheKey = getTimestampCacheKey(asset);
+  const legacyKey = asset.id;
+
   // Level 1: Check JSON Cache (instant, no async)
-  const fromJson = getFromJsonCache(asset.id);
+  const fromJson = getNormalizedCachedTimestamp(getFromJsonCache(cacheKey));
   if (fromJson != null) {
-    if (!timestampCache.has(asset.id)) {
-      timestampCache.set(asset.id, fromJson);
+    if (!timestampCache.has(cacheKey)) {
+      timestampCache.set(cacheKey, fromJson);
     }
     return fromJson;
   }
 
+  const fromLegacyJson = getNormalizedCachedTimestamp(getFromJsonCache(legacyKey));
+  if (fromLegacyJson != null) {
+    if (!timestampCache.has(cacheKey)) {
+      timestampCache.set(cacheKey, fromLegacyJson);
+    }
+    setInJsonCacheSingle(cacheKey, fromLegacyJson);
+    queuePersistTimestamp(cacheKey, fromLegacyJson);
+    return fromLegacyJson;
+  }
+
   // Level 2: Check in-memory cache
-  const cached = timestampCache.get(asset.id);
+  const cached = timestampCache.get(cacheKey);
   if (cached != null) return cached;
 
   // Level 3: Compute and queue for persistence
   const computed = computeTimestamp(asset);
-  timestampCache.set(asset.id, computed);
-  setInJsonCacheSingle(asset.id, computed);
-  queuePersistTimestamp(asset.id, computed);
+  timestampCache.set(cacheKey, computed);
+  setInJsonCacheSingle(cacheKey, computed);
+  queuePersistTimestamp(cacheKey, computed);
   return computed;
 };
 
